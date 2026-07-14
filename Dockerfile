@@ -34,7 +34,9 @@ RUN apk update && apk upgrade && \
         # Procps for process management
         procps \
         # Time utilities
-        tzdata && \
+        tzdata \
+        # GNU coreutils — provides stdbuf for line-buffered tool output
+        coreutils && \
     # Set timezone
     cp /usr/share/zoneinfo/UTC /etc/localtime && \
     echo "UTC" > /etc/timezone && \
