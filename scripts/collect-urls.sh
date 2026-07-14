@@ -7,6 +7,10 @@
 # NOTE: -e removed — individual tool failures must not abort the scan
 set -uo pipefail
 
+# ── Ensure Python venv tools are on PATH ────────────────────
+export PATH="/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:$PATH"
+export VIRTUAL_ENV="/opt/venv"
+
 # ── Colors ──────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -68,7 +72,7 @@ if command -v gau &>/dev/null; then
     echo -e ""
     echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/4${WHITE}]${NC} ${BOLD}gau${NC} ${DIM}— wayback + commoncrawl + otx + urlscan${NC}"
     # stdbuf forces line-buffered output so every line streams live
-    echo "$DOMAIN" | stdbuf -oL gau \
+    echo "$DOMAIN" | gau \
         --threads "$THREADS" \
         --providers wayback,commoncrawl,otx,urlscan \
         --blacklist png,jpg,gif,jpeg,webp,svg,ico,css,woff,ttf \
@@ -86,7 +90,7 @@ STEP_START=$(date +%s)
 if command -v waybackurls &>/dev/null; then
     echo -e ""
     echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}waybackurls${NC} ${DIM}— wayback machine URL history${NC}"
-    echo "$DOMAIN" | stdbuf -oL waybackurls 2>&1 | tee "$OUTPUT_DIR/wayback_live.log" | \
+    echo "$DOMAIN" | waybackurls 2>&1 | tee "$OUTPUT_DIR/wayback_live.log" | \
         grep -E "^https?://" > "$OUTPUT_DIR/wayback.txt" || true
     WB_C=$(wc -l < "$OUTPUT_DIR/wayback.txt" 2>/dev/null || echo 0)
     ok "waybackurls" "$WB_C" "$(elapsed_since $STEP_START)"
@@ -103,7 +107,7 @@ if command -v waymore &>/dev/null; then
     echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/4${WHITE}]${NC} ${BOLD}waymore${NC} ${DIM}— extended archive search  [procs=${WAYMORE_PROCS}/5 max]${NC}"
     # Pre-create the file — waymore may exit before writing if it errors
     touch "$OUTPUT_DIR/waymore.txt"
-    stdbuf -oL waymore \
+    waymore \
         -i "$DOMAIN" \
         -mode U \
         -oU "$OUTPUT_DIR/waymore.txt" \

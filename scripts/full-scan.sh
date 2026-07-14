@@ -7,6 +7,10 @@
 # exit codes and we must NOT abort the scan; each tool uses || true
 set -uo pipefail
 
+# ── Ensure Python venv tools (waymore, uro, xnLinkFinder) are on PATH ───────
+export PATH="/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:$PATH"
+export VIRTUAL_ENV="/opt/venv"
+
 # ── Colors ──────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -123,8 +127,7 @@ run_tool() {
         | tee -a "$OUTPUT_DIR/scan.log"
 
     # Run tool, pipe all output to logfile only (not terminal)
-    # Redirect terminal output to /dev/null for clean display
-    stdbuf -oL "$@" >> "$logfile" 2>&1 &
+    "$@" >> "$logfile" 2>&1 &
     local pid=$!
 
     # Show progress dots while tool runs (one dot per 2 seconds)
@@ -186,13 +189,9 @@ if command -v katana &>/dev/null; then
             -d "$DEPTH" \
             -c "$THREADS" \
             -timeout "$TIMEOUT" \
-            -jc \
-            -fx \
-            -xhr \
-            -aff \
+            -silent \
             -rl 150 \
-            -o "$OUTPUT_DIR/katana/results.txt" \
-            -jsonl "$OUTPUT_DIR/katana/results.jsonl"
+            -o "$OUTPUT_DIR/katana/results.txt"
     KATANA_COUNT=$(wc -l < "$OUTPUT_DIR/katana/results.txt" 2>/dev/null || echo 0)
     ok "katana" "$KATANA_COUNT URLs" "$(elapsed_since $STEP_START)"
 else
@@ -205,7 +204,7 @@ STEP_START=$(date +%s)
 if command -v gau &>/dev/null; then
     tool_header "2/6" "gau" "wayback + commoncrawl + otx + urlscan"
     run_tool "gau" "$OUTPUT_DIR/gau/tool.log" \
-        bash -c "echo '$DOMAIN' | stdbuf -oL gau \
+        bash -c "echo '$DOMAIN' | gau \
             --threads '$THREADS' \
             --timeout '$TIMEOUT' \
             --providers wayback,commoncrawl,otx,urlscan \
@@ -284,7 +283,7 @@ STEP_START=$(date +%s)
 if command -v waybackurls &>/dev/null; then
     tool_header "6/6" "waybackurls" "wayback machine URL history"
     run_tool "waybackurls" "$OUTPUT_DIR/waymore/wayback_tool.log" \
-        bash -c "echo '$DOMAIN' | stdbuf -oL waybackurls > '$OUTPUT_DIR/waymore/wayback.txt'"
+        bash -c "echo '$DOMAIN' | waybackurls > '$OUTPUT_DIR/waymore/wayback.txt'"
     WAYBACK_COUNT=$(wc -l < "$OUTPUT_DIR/waymore/wayback.txt" 2>/dev/null || echo 0)
     ok "waybackurls" "$WAYBACK_COUNT URLs" "$(elapsed_since $STEP_START)"
 else

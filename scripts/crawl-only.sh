@@ -7,6 +7,10 @@
 # NOTE: -e removed — individual tool failures must not abort the scan
 set -uo pipefail
 
+# ── Ensure Python venv tools are on PATH ────────────────────
+export PATH="/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:$PATH"
+export VIRTUAL_ENV="/opt/venv"
+
 # ── Colors ──────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -63,7 +67,7 @@ run_tool() {
     shift 2
     [ "${1:-}" = "--" ] && shift
     echo -e "  ${DIM}│  ${CYAN}▶ ${label}${NC} ${DIM}running...${NC}" | tee -a "$OUTPUT_DIR/scan.log"
-    stdbuf -oL "$@" >> "$logfile" 2>&1 &
+    "$@" >> "$logfile" 2>&1 &
     local pid=$!
     local count=0
     while kill -0 "$pid" 2>/dev/null; do
@@ -103,17 +107,13 @@ if command -v katana &>/dev/null; then
             -u "$TARGET" \
             -d "$DEPTH" \
             -c "$THREADS" \
-            -jc \
             -kf all \
-            -aff \
-            -fx \
-            -xhr \
             -H "User-Agent: Mozilla/5.0 (compatible; CrawlerToolkit/2026)" \
             -rl 150 \
             -timeout 15 \
             -retry 2 \
-            -o "$OUTPUT_DIR/katana/urls.txt" \
-            -jsonl "$OUTPUT_DIR/katana/results.jsonl"
+            -silent \
+            -o "$OUTPUT_DIR/katana/urls.txt"
     KATANA_C=$(wc -l < "$OUTPUT_DIR/katana/urls.txt" 2>/dev/null || echo 0)
     ok "katana" "$KATANA_C" "$(elapsed_since $STEP_START)"
 else

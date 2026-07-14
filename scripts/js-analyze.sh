@@ -8,6 +8,10 @@
 # NOTE: -e removed — individual steps must not abort the whole analysis
 set -uo pipefail
 
+# ── Ensure Python venv tools are on PATH ────────────────────
+export PATH="/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:$PATH"
+export VIRTUAL_ENV="/opt/venv"
+
 # ── Colors ──────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -57,7 +61,7 @@ run_tool() {
     shift 2
     [ "${1:-}" = "--" ] && shift
     echo -e "  ${DIM}│  ${CYAN}▶ ${label}${NC} ${DIM}running...${NC}" | tee -a "$OUTPUT_DIR/scan.log"
-    stdbuf -oL "$@" >> "$logfile" 2>&1 &
+    "$@" >> "$logfile" 2>&1 &
     local pid=$!
     local count=0
     while kill -0 "$pid" 2>/dev/null; do
@@ -99,9 +103,9 @@ if command -v katana &>/dev/null; then
     run_tool "katana" "$OUTPUT_DIR/js-files/katana.log" \
         katana \
             -u "$TARGET" \
-            -jc \
             -d 3 \
             -c 30 \
+            -silent \
             -extension-match js \
             -o "$OUTPUT_DIR/js-files/js-urls.txt"
     ok "katana JS discovery" "$(wc -l < "$OUTPUT_DIR/js-files/js-urls.txt")" "$(elapsed_since $STEP_START)"
@@ -115,7 +119,7 @@ if command -v gau &>/dev/null; then
     echo -e ""
     echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}gau${NC} ${DIM}— JS files from wayback + commoncrawl${NC}"
     run_tool "gau-js" "$OUTPUT_DIR/js-files/gau.log" \
-        bash -c "echo '$DOMAIN' | stdbuf -oL gau \
+        bash -c "echo '$DOMAIN' | gau \
             --providers wayback,commoncrawl 2>&1 | \
             grep -E '\.js(\?|\$)' >> '$OUTPUT_DIR/js-files/js-urls.txt' || true"
     ok "gau JS discovery" "done" "$(elapsed_since $STEP_START)"
