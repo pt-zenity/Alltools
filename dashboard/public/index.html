@@ -160,6 +160,10 @@
                                         <i class="fab fa-js"></i>
                                         <span>JS Analyze</span>
                                     </button>
+                                    <button class="scan-type-btn" data-type="custom">
+                                        <i class="fas fa-terminal"></i>
+                                        <span>Custom</span>
+                                    </button>
                                 </div>
                                 <button id="quick-scan-btn" class="btn-primary" onclick="quickScan()">
                                     <i class="fas fa-play"></i>
@@ -229,9 +233,9 @@
                                         <label>Scan Type</label>
                                         <select id="scan-type" class="select-input">
                                             <option value="full-scan">🔍 Full Reconnaissance Scan</option>
-                                            <option value="crawl">🕷️ Crawl Only (katana + gospider)</option>
-                                            <option value="urls">🔗 URL Collection (gau + waymore)</option>
-                                            <option value="js-analyze">📜 JavaScript Analysis</option>
+                                            <option value="crawl">🕷️ Crawl Only (katana + gospider + cariddi)</option>
+                                            <option value="urls">🔗 URL Collection (gau + waymore + mantra)</option>
+                                            <option value="js-analyze">📜 JavaScript Analysis (SecretFinder + JSScanner)</option>
                                             <option value="custom">⚡ Custom Command</option>
                                         </select>
                                     </div>
@@ -288,6 +292,26 @@
                                         <label class="tool-toggle">
                                             <input type="checkbox" checked data-tool="httpx">
                                             <span>httpx</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="cariddi">
+                                            <span>cariddi</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="mantra">
+                                            <span>mantra</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="gitleaks">
+                                            <span>gitleaks</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="SecretFinder">
+                                            <span>SecretFinder</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="JSScanner">
+                                            <span>JSScanner</span>
                                         </label>
                                     </div>
                                 </div>

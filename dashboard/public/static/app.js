@@ -44,6 +44,12 @@ const TOOL_INFO = {
   unfurl:       { icon:'🔓', color:'#f59e0b', desc:'Pull bits of URLs — extract paths, domains, params, values.',                          tags:['Go','URL Parsing','Extraction'],       cmd:'cat urls.txt | unfurl domains' },
   node:         { icon:'🟢', color:'#22c55e', desc:'Node.js runtime — powering the dashboard.',                                             tags:['Runtime','JavaScript'],               cmd:'node --version' },
   python3:      { icon:'🐍', color:'#f59e0b', desc:'Python 3 — runtime for waymore, xnLinkFinder, uro.',                                  tags:['Runtime','Python'],                   cmd:'python3 --version' },
+  // ── New tools v2026.6.0 ─────────────────────────────────────
+  cariddi:      { icon:'🦀', color:'#f97316', desc:'In-depth crawler: endpoints, extensions, secrets, JS analysis in one pass.',            tags:['Go','Crawling','Secrets'],             cmd:'echo "https://example.com" | cariddi -s -ext 1 -e -eps' },
+  mantra:       { icon:'🔑', color:'#ec4899', desc:'Hunt secrets buried in JS/HTML responses — API keys, tokens, passwords.',               tags:['Go','Secret Hunting','JS'],            cmd:'cat urls.txt | mantra' },
+  gitleaks:     { icon:'🔐', color:'#ef4444', desc:'Scan output files for leaked credentials, secrets, API keys using regex rules.',        tags:['Go','Credentials','Leak Detection'],   cmd:'gitleaks detect --source /workspace/output --no-git' },
+  SecretFinder: { icon:'🕵️', color:'#a855f7', desc:'Python scanner for secrets/keys/tokens in JavaScript files using regex patterns.',     tags:['Python','JS Secrets','Regex'],         cmd:'python3 /opt/SecretFinder/SecretFinder.py -i <JS_URL> -o cli' },
+  JSScanner:    { icon:'📋', color:'#06b6d4', desc:'Shell-based JS endpoint and secret scanner — extracts links and sensitive patterns.',   tags:['Shell','JS Analysis','Endpoints'],     cmd:'bash /opt/JSScanner/script.sh <JS_URL>' },
 };
 
 // ── Init ──────────────────────────────────────────────────────
@@ -339,10 +345,18 @@ function stopCurrentScan() {
 
 // ── Scan form ──────────────────────────────────────────────────
 function initScanForm() {
+  // Sync scan-type-btn clicks → select dropdown
   document.querySelectorAll('.scan-type-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.scan-type-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      // Keep select in sync
+      const typeSelect = document.getElementById('scan-type');
+      if (typeSelect) {
+        typeSelect.value = btn.dataset.type;
+        const cg = document.getElementById('custom-cmd-group');
+        if (cg) cg.style.display = btn.dataset.type === 'custom' ? 'flex' : 'none';
+      }
     });
   });
 
@@ -351,10 +365,15 @@ function initScanForm() {
   if (depth)   depth.addEventListener('input',   () => { const v = document.getElementById('scan-depth-val');   if (v) v.textContent = depth.value; });
   if (threads) threads.addEventListener('input', () => { const v = document.getElementById('scan-threads-val'); if (v) v.textContent = threads.value; });
 
+  // Sync select dropdown → scan-type-btn highlight
   const typeSelect = document.getElementById('scan-type');
   if (typeSelect) typeSelect.addEventListener('change', () => {
     const cg = document.getElementById('custom-cmd-group');
     if (cg) cg.style.display = typeSelect.value === 'custom' ? 'flex' : 'none';
+    // Highlight matching button if exists
+    document.querySelectorAll('.scan-type-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.type === typeSelect.value);
+    });
   });
 
   const qt = document.getElementById('quick-target');
@@ -775,7 +794,7 @@ function loadDocs() {
   c.innerHTML = `
     <div class="docs-card">
       <h2><i class="fas fa-book"></i> Documentation</h2>
-      <p>Web Crawler Toolkit 2026 — 17 security tools orchestrated via a Node.js dashboard with real-time WebSocket streaming.</p>
+      <p>Web Crawler Toolkit 2026 — 22 security tools orchestrated via a Node.js dashboard with real-time WebSocket streaming.</p>
       <h3>Quick Start</h3>
       <ol>
         <li>Go to <strong>New Scan</strong> and enter your target URL (e.g. <code>https://example.com</code>)</li>
@@ -787,14 +806,24 @@ function loadDocs() {
       <h3>Scan Types</h3>
       <table class="docs-table">
         <tr><th>Type</th><th>Tools Used</th><th>Best For</th></tr>
-        <tr><td>Full Scan</td><td>katana, gau, gospider, waymore, xnLinkFinder, httpx, gf</td><td>Complete recon</td></tr>
-        <tr><td>Crawl Only</td><td>katana, gospider, xnLinkFinder, httpx</td><td>Fast URL discovery</td></tr>
-        <tr><td>URL Collection</td><td>gau, waybackurls, waymore</td><td>Passive/archive URLs</td></tr>
-        <tr><td>JS Analyze</td><td>katana, gau, curl + regex</td><td>JS endpoint extraction</td></tr>
+        <tr><td>Full Scan</td><td>katana, gau, gospider, waymore, xnLinkFinder, cariddi, httpx, gf<br><em>+ Phase 4.5: mantra, gitleaks, SecretFinder</em></td><td>Complete recon + secret detection</td></tr>
+        <tr><td>Crawl Only</td><td>katana, gospider, xnLinkFinder, cariddi, httpx</td><td>Fast URL discovery + deep crawl</td></tr>
+        <tr><td>URL Collection</td><td>gau, waybackurls, waymore + mantra</td><td>Passive/archive URLs + secret scan</td></tr>
+        <tr><td>JS Analyze</td><td>katana, gau + SecretFinder, mantra, JSScanner</td><td>JS endpoint + secret extraction</td></tr>
         <tr><td>Custom</td><td>any command</td><td>Direct tool access</td></tr>
       </table>
+      <h3>New Tools v2026.6.0</h3>
+      <table class="docs-table">
+        <tr><th>Tool</th><th>Type</th><th>Purpose</th></tr>
+        <tr><td><code>cariddi</code></td><td>Go binary</td><td>In-depth crawler: endpoints, extensions, secrets in one pass</td></tr>
+        <tr><td><code>mantra</code></td><td>Go binary</td><td>Hunt secrets/API keys/tokens in HTTP responses</td></tr>
+        <tr><td><code>gitleaks</code></td><td>Go binary</td><td>Scan output files for leaked credentials using regex rules</td></tr>
+        <tr><td><code>SecretFinder</code></td><td>Python script</td><td>Extract secrets/keys from JavaScript files via regex</td></tr>
+        <tr><td><code>JSScanner</code></td><td>Shell script</td><td>JS endpoint and sensitive pattern scanner</td></tr>
+      </table>
       <h3>Tool Directory</h3>
-      <p>All tools installed in <code>/usr/local/bin/</code> and <code>/opt/venv/bin/</code>. Access them directly in the <strong>Terminal</strong> tab.</p>
+      <p>Go tools: <code>/root/go/bin/</code> &nbsp;|&nbsp; Python tools: <code>/opt/venv/bin/</code> &nbsp;|&nbsp; Scripts: <code>/opt/SecretFinder/</code>, <code>/opt/JSScanner/</code></p>
+      <p>Access all tools directly in the <strong>Terminal</strong> tab.</p>
     </div>`;
 }
 
