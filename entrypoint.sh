@@ -78,9 +78,21 @@ case "$1" in
         print_banner
         check_tools
         # Start SSH daemon for remote access (password: CrawlerKit2026!)
+        # Auto-install openssh if missing (handles containers built without it)
+        if ! command -v sshd &>/dev/null; then
+            echo -e "${YELLOW}[*] Installing openssh-server + sftp-server...${NC}"
+            apk add --no-cache openssh-server openssh-sftp-server 2>/dev/null || true
+        fi
         if command -v sshd &>/dev/null; then
+            # Ensure host keys exist
+            ssh-keygen -A 2>/dev/null || true
+            # Ensure root password is set
+            echo 'root:CrawlerKit2026!' | chpasswd 2>/dev/null || true
+            # Write sshd_config with SFTP subsystem (idempotent)
+            printf 'Port 22\nPermitRootLogin yes\nPasswordAuthentication yes\nChallengeResponseAuthentication no\nSubsystem sftp /usr/lib/ssh/sftp-server\n' \
+                > /etc/ssh/sshd_config
             /usr/sbin/sshd 2>/dev/null && \
-                echo -e "${GREEN}[✓] SSH server started on port 22${NC}" || \
+                echo -e "${GREEN}[✓] SSH server started on port 22 (SCP/SFTP ready)${NC}" || \
                 echo -e "${YELLOW}[!] SSH server failed to start${NC}"
         fi
         echo -e "${GREEN}[*] Starting Web Dashboard on port 3000...${NC}"
