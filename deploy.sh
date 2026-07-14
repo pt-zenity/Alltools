@@ -19,7 +19,7 @@ set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-23.111.15.50}"
 VPS_PORT="${VPS_PORT:-8888}"
-VPS_SSH_PORT="${VPS_SSH_PORT:-8890}"
+VPS_SSH_PORT="${VPS_SSH_PORT:-9022}"
 VPS_SSH_USER="${VPS_SSH_USER:-root}"
 VPS_SSH_PASS="${VPS_SSH_PASS:-CrawlerKit2026!}"
 VPS_API="http://${VPS_HOST}:${VPS_PORT}"
@@ -69,38 +69,33 @@ http_upload() {
     fi
 }
 
-# ── SCP upload (via sshpass + scp via socat proxy port 8890) ─
+# ── SCP upload (via sshpass + scp, port 9022→container:22) ──────────────
 scp_upload() {
     local local_path="$1"
     local remote_path="$2"
     [ ! -f "$local_path" ] && echo -e "  ${RED}[!] Not found: ${local_path}${NC}" && return 1
 
     if ! command -v sshpass &>/dev/null; then
-        echo -e "  ${YELLOW}[!] sshpass not found — install with: apt-get install sshpass${NC}"
+        echo -e "  ${YELLOW}[!] sshpass not found — apt-get install sshpass${NC}"
         return 1
     fi
 
-    # ProxyCommand: use socat through VPS:8890 (Node.js TCP proxy → container port 22)
-    # This works when docker doesn't directly map port 22 but Node proxy is on 8890
-    local proxy_cmd="socat - TCP:${VPS_HOST}:${VPS_SSH_PORT}"
-    
     sshpass -p "$VPS_SSH_PASS" scp \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=15 \
-        -o ProxyCommand="$proxy_cmd" \
+        -P "$VPS_SSH_PORT" \
         "$local_path" \
-        "${VPS_SSH_USER}@localhost:${remote_path}" 2>&1 && \
+        "${VPS_SSH_USER}@${VPS_HOST}:${remote_path}" 2>&1 && \
     sshpass -p "$VPS_SSH_PASS" ssh \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=15 \
-        -o ProxyCommand="$proxy_cmd" \
-        "${VPS_SSH_USER}@localhost" \
+        -p "$VPS_SSH_PORT" \
+        "${VPS_SSH_USER}@${VPS_HOST}" \
         "chmod +x '${remote_path}' 2>/dev/null; echo OK" 2>&1 | grep -q "OK" && \
-    echo -e "  ${GREEN}[✓]${NC} $(basename "$local_path") → ${remote_path} ${CYAN}(SCP via proxy:${VPS_SSH_PORT})${NC}" || {
-        echo -e "  ${RED}[✗]${NC} SCP failed: $local_path — falling back to HTTP API"
-        # Fallback to HTTP API
+    echo -e "  ${GREEN}[✓]${NC} $(basename "$local_path") → ${remote_path} ${CYAN}(SCP :${VPS_SSH_PORT})${NC}" || {
+        echo -e "  ${RED}[✗]${NC} SCP failed: $local_path — fallback HTTP API"
         http_upload "$local_path" "$remote_path"
     }
 }
@@ -189,6 +184,6 @@ echo -e "  ${GREEN}[✓]${NC} API version: ${BOLD}${HEALTH}${NC}"
 echo ""
 echo -e "${GREEN}Done!${NC}"
 echo ""
-echo -e "${YELLOW}NOTE — SSH/SCP Setup:${NC}"
-echo -e "  For SCP mode, rebuild container with: docker run -p 8888:3000 -p 9022:22 ..."
-echo -e "  Then use: SCP_MODE=1 VPS_SSH_PORT=9022 ./deploy.sh scripts"
+echo -e "${GREEN}NOTE — SSH/SCP aktif:${NC}"
+echo -e "  Port 9022 sudah mapped ke container:22"
+echo -e "  Gunakan: ${CYAN}SCP_MODE=1 ./deploy.sh all${NC}"
