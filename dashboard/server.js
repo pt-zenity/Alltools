@@ -1,67 +1,70 @@
 /**
  * Web Crawler Toolkit 2026 - Dashboard Server
- * Node.js + Express + WebSocket  (FIXED: real-time streaming)
+ * Node.js + Express + WebSocket — STREAMING FIXED v3
+ *
+ * Key design:
+ *  - spawn() with { stdio: ['ignore','pipe','pipe'] }
+ *  - stdout/stderr data events flush IMMEDIATELY per chunk (no batching)
+ *  - flushLines() splits on \n, emits every complete line via broadcastJob()
+ *  - 5000-line ring buffer per job for late-joiner replay
+ *  - WS subscribe message triggers instant replay then live stream
+ *  - NO terminal clearing on job-started in frontend (fixed in app.js)
  */
 
-const express = require('express');
-const http = require('http');
+'use strict';
+
+const express   = require('express');
+const http      = require('http');
 const WebSocket = require('ws');
 const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+const path      = require('path');
+const fs        = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const cors = require('cors');
-const multer = require('multer');
+const cors      = require('cors');
+const multer    = require('multer');
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss    = new WebSocket.Server({ server });
 
-const PORT = process.env.PORT || 3000;
-const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(__dirname, '../workspace/output');
-const SCRIPTS_DIR = process.env.SCRIPTS_DIR || path.join(__dirname, '../scripts');
+const PORT        = process.env.PORT        || 3000;
+const OUTPUT_DIR  = process.env.OUTPUT_DIR  || '/workspace/output';
+const SCRIPTS_DIR = process.env.SCRIPTS_DIR || '/workspace/scripts';
 
-// Active jobs tracker
-const activeJobs = new Map();
-const jobHistory = [];
+// ── Job storage ──────────────────────────────────────────────
+const activeJobs = new Map();   // jobId → job
+const jobHistory = [];          // newest first, kept forever (small)
 
-// Per-client subscriptions: ws -> Set of jobIds they want to watch
-const clientSubscriptions = new Map();
+// ── Per-client subscription ──────────────────────────────────
+// ws → Set<jobId>  (empty Set = receives everything)
+const clientSubs = new Map();
 
-// Middleware
+// ── Middleware ───────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// File upload setup
-const upload = multer({ dest: path.join(__dirname, '../workspace/targets/') });
+const upload = multer({ dest: '/workspace/targets/' });
 
 // ── WebSocket helpers ────────────────────────────────────────
 
-/** Broadcast to ALL connected clients */
 function broadcast(data) {
-  const message = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
+  const msg = JSON.stringify(data);
+  wss.clients.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
   });
 }
 
-/** Send to clients subscribed to a specific jobId, plus unfiltered clients */
 function broadcastJob(jobId, data) {
-  const message = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState !== WebSocket.OPEN) return;
-    const subs = clientSubscriptions.get(client);
-    // Send if: client has no subscription filter, or is subscribed to this jobId
-    if (!subs || subs.size === 0 || subs.has(jobId)) {
-      client.send(message);
-    }
+  const msg = JSON.stringify(data);
+  wss.clients.forEach(ws => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const subs = clientSubs.get(ws);
+    if (!subs || subs.size === 0 || subs.has(jobId)) ws.send(msg);
   });
 }
 
-// ── Tool availability check ──────────────────────────────────
+// ── Tool availability ────────────────────────────────────────
 async function checkTools() {
   const tools = [
     { name: 'katana',       cmd: 'katana',       flag: '-version'  },
@@ -83,51 +86,46 @@ async function checkTools() {
     { name: 'python3',      cmd: 'python3',      flag: '--version' },
   ];
 
-  const results = await Promise.all(tools.map(tool =>
-    new Promise(resolve => {
-      const proc = spawn(tool.cmd, [tool.flag], {
-        timeout: 5000,
-        env: { ...process.env, PATH: process.env.PATH + ':/usr/local/bin:/opt/venv/bin' }
-      });
-      let version = '';
-      proc.stdout.on('data', d => version += d);
-      proc.stderr.on('data', d => version += d);
-      proc.on('close', code => {
-        resolve({
-          name: tool.name,
-          available: code === 0 || code === 1 || code === 2,
-          version: version.split('\n')[0].trim().substring(0, 60) || 'available'
-        });
-      });
-      proc.on('error', () => {
-        resolve({ name: tool.name, available: false, version: 'not found' });
-      });
-    })
-  ));
-
-  return results;
+  return Promise.all(tools.map(t => new Promise(resolve => {
+    const p = spawn(t.cmd, [t.flag], {
+      timeout: 5000,
+      env: { ...process.env, PATH: process.env.PATH + ':/usr/local/bin:/opt/venv/bin' }
+    });
+    let ver = '';
+    p.stdout.on('data', d => { ver += d; });
+    p.stderr.on('data', d => { ver += d; });
+    p.on('close', code => resolve({
+      name: t.name,
+      available: code === 0 || code === 1 || code === 2,
+      version: ver.split('\n')[0].trim().substring(0, 60) || 'available'
+    }));
+    p.on('error', () => resolve({ name: t.name, available: false, version: 'not found' }));
+  })));
 }
 
-// ── Execute a scan job ───────────────────────────────────────
+// ── Core: execute a scan job ─────────────────────────────────
 function executeScan(jobId, type, options) {
   const job = {
-    id: jobId,
+    id:        jobId,
     type,
     options,
-    status: 'running',
+    status:    'running',
     startTime: new Date().toISOString(),
-    output: [],       // full log buffer (for late-joining clients)
+    endTime:   null,
+    exitCode:  null,
+    output:    [],      // ring buffer — max 5000 entries
     lineCount: 0,
-    pid: null
+    pid:       null,
+    outputFiles: []
   };
 
   activeJobs.set(jobId, job);
   jobHistory.unshift(job);
+  if (jobHistory.length > 200) jobHistory.pop();
 
+  // ── Build command ─────────────────────────────────────────
   let cmd, args;
-  const target  = options.target;
-  const depth   = options.depth   || '3';
-  const threads = options.threads || '50';
+  const { target, depth = '3', threads = '50', command } = options;
 
   switch (type) {
     case 'full-scan':
@@ -148,32 +146,36 @@ function executeScan(jobId, type, options) {
       break;
     case 'custom':
       cmd  = '/bin/bash';
-      args = ['-c', options.command];
+      args = ['-c', command || 'echo no command'];
       break;
     default:
-      broadcast({ type: 'job-error', jobId, message: 'Unknown scan type' });
+      broadcastJob(jobId, { type: 'job-error', jobId, message: `Unknown scan type: ${type}` });
       activeJobs.delete(jobId);
       return null;
   }
 
+  // ── Spawn ─────────────────────────────────────────────────
+  const THREADS = threads;
+  const DEPTH   = depth;
+
   const proc = spawn(cmd, args, {
-    // stdbuf -oL forces line-buffered stdout so tools flush every line immediately
-    // We wrap via stdbuf when available, fall back gracefully
+    stdio:    ['ignore', 'pipe', 'pipe'],
+    detached: false,
     env: {
       ...process.env,
-      THREADS:     threads,
-      DEPTH:       depth,
-      PATH:        process.env.PATH + ':/usr/local/bin:/opt/venv/bin',
-      VIRTUAL_ENV: '/opt/venv',
-      // force unbuffered python output
-      PYTHONUNBUFFERED: '1',
-      // force unbuffered C stdio for Go tools
-      FORCE_COLOR: '0',
-    },
-    // Important: do NOT buffer in Node — get chunks immediately
+      THREADS,
+      DEPTH,
+      TIMEOUT:         '15',
+      PATH:            `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`,
+      VIRTUAL_ENV:     '/opt/venv',
+      PYTHONUNBUFFERED:'1',
+      FORCE_COLOR:     '0',
+      TERM:            'dumb',
+    }
   });
 
   job.pid = proc.pid;
+  console.log(`[JOB] start  id=${jobId} type=${type} target=${target || command} pid=${proc.pid}`);
 
   broadcast({
     type:      'job-started',
@@ -184,19 +186,21 @@ function executeScan(jobId, type, options) {
     timestamp: new Date().toISOString()
   });
 
-  console.log(`[JOB] Started ${type} on ${target} | id=${jobId} pid=${proc.pid}`);
+  // ── Stream lines ──────────────────────────────────────────
+  let outBuf = '';
+  let errBuf = '';
 
-  // ── Real-time line streaming ────────────────────────────────
-  let stdoutBuf = '';
-  let stderrBuf = '';
-
-  function flushLines(buffer, remaining, stream) {
-    const lines = buffer.split('\n');
-    // All but last element are complete lines
-    for (let i = 0; i < lines.length - 1; i++) {
-      const line = lines[i];
-      // Store in job buffer (keep last 2000 lines to avoid memory blowup)
-      if (job.output.length >= 2000) job.output.shift();
+  /**
+   * Split buffer on newlines.
+   * Emit every complete line immediately via broadcastJob.
+   * Return the trailing incomplete fragment.
+   */
+  function flushLines(buf, stream) {
+    const parts = buf.split('\n');
+    for (let i = 0; i < parts.length - 1; i++) {
+      const line = parts[i];
+      // Ring buffer — keep last 5000 lines
+      if (job.output.length >= 5000) job.output.shift();
       job.output.push({ t: new Date().toISOString(), text: line, stream });
       job.lineCount++;
 
@@ -209,33 +213,36 @@ function executeScan(jobId, type, options) {
         timestamp: new Date().toISOString()
       });
     }
-    // Return the incomplete last fragment
-    return lines[lines.length - 1];
+    return parts[parts.length - 1]; // incomplete tail
   }
 
+  // Pipe stdout — emit immediately on every data chunk
   proc.stdout.on('data', chunk => {
-    stdoutBuf += chunk.toString();
-    stdoutBuf = flushLines(stdoutBuf, '', 'stdout');
+    outBuf += chunk.toString('utf8');
+    outBuf  = flushLines(outBuf, 'stdout');
   });
 
+  // Pipe stderr — emit immediately on every data chunk
   proc.stderr.on('data', chunk => {
-    stderrBuf += chunk.toString();
-    stderrBuf = flushLines(stderrBuf, '', 'stderr');
+    errBuf += chunk.toString('utf8');
+    errBuf  = flushLines(errBuf, 'stderr');
   });
 
-  // Flush any remaining partial lines when process closes
-  proc.on('close', code => {
-    if (stdoutBuf.trim()) flushLines(stdoutBuf + '\n', '', 'stdout');
-    if (stderrBuf.trim()) flushLines(stderrBuf + '\n', '', 'stderr');
+  // Flush remaining partial lines on close
+  proc.on('close', (code, signal) => {
+    if (outBuf.trim()) { outBuf += '\n'; flushLines(outBuf, 'stdout'); }
+    if (errBuf.trim()) { errBuf += '\n'; flushLines(errBuf, 'stderr'); }
 
-    job.status    = code === 0 ? 'completed' : (code === null ? 'stopped' : 'failed');
-    job.endTime   = new Date().toISOString();
-    job.exitCode  = code;
+    job.status   = code === 0 ? 'completed' : (signal ? 'stopped' : 'failed');
+    job.endTime  = new Date().toISOString();
+    job.exitCode = code;
 
-    const domain = (target || '').replace(/https?:\/\//, '').replace(/\/.*/, '');
-    job.outputFiles = getOutputFiles(domain);
+    const dom = (target || '').replace(/https?:\/\//, '').replace(/\/.*/, '');
+    job.outputFiles = getOutputFiles(dom);
 
-    const duration = new Date(job.endTime) - new Date(job.startTime);
+    const dur = Date.now() - new Date(job.startTime).getTime();
+
+    console.log(`[JOB] done   id=${jobId} exit=${code} lines=${job.lineCount} ${dur}ms`);
 
     broadcastJob(jobId, {
       type:        'job-complete',
@@ -244,15 +251,15 @@ function executeScan(jobId, type, options) {
       status:      job.status,
       outputFiles: job.outputFiles,
       lineCount:   job.lineCount,
-      duration,
+      duration:    dur,
       timestamp:   new Date().toISOString()
     });
 
-    console.log(`[JOB] Finished ${jobId} | exit=${code} lines=${job.lineCount} duration=${duration}ms`);
     activeJobs.delete(jobId);
   });
 
   proc.on('error', err => {
+    console.error(`[JOB] error  id=${jobId}`, err.message);
     job.status = 'error';
     broadcastJob(jobId, {
       type:      'job-error',
@@ -266,90 +273,70 @@ function executeScan(jobId, type, options) {
   return job;
 }
 
-// ── Get output files ─────────────────────────────────────────
+// ── Output file discovery ────────────────────────────────────
 function getOutputFiles(domain) {
   try {
     if (!fs.existsSync(OUTPUT_DIR)) return [];
-    const dirs = fs.readdirSync(OUTPUT_DIR)
-      .filter(d => domain ? d.includes(domain) : true)
+    return fs.readdirSync(OUTPUT_DIR)
+      .filter(d => !domain || d.includes(domain))
       .map(d => path.join(OUTPUT_DIR, d))
-      .filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
-
-    const files = [];
-    dirs.forEach(dir => walkDir(dir, files));
-    return files.slice(0, 100);
-  } catch (e) {
-    return [];
-  }
+      .filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } })
+      .flatMap(dir => { const f = []; walkDir(dir, f); return f; })
+      .slice(0, 100);
+  } catch { return []; }
 }
 
-function walkDir(dir, results) {
+function walkDir(dir, out) {
   try {
     fs.readdirSync(dir).forEach(item => {
       const full = path.join(dir, item);
       try {
-        const stat = fs.statSync(full);
-        if (stat.isDirectory()) {
-          walkDir(full, results);
-        } else {
-          results.push({ path: full, name: item, size: stat.size, modified: stat.mtime.toISOString() });
-        }
+        const s = fs.statSync(full);
+        if (s.isDirectory()) walkDir(full, out);
+        else out.push({ path: full, name: item, size: s.size, modified: s.mtime.toISOString() });
       } catch {}
     });
   } catch {}
 }
 
-// ── API Routes ───────────────────────────────────────────────
+// ── REST API ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '2026.1.0', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '2026.3.0', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/tools', async (req, res) => {
   try {
     res.json({ tools: await checkTools(), timestamp: new Date().toISOString() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Start scan
 app.post('/api/scan/start', (req, res) => {
-  const { type, target, depth, threads, command } = req.body;
-  if (!target && type !== 'custom') {
-    return res.status(400).json({ error: 'Target is required' });
-  }
+  const { type = 'full-scan', target, depth, threads, command } = req.body;
+  if (!target && type !== 'custom') return res.status(400).json({ error: 'Target required' });
 
   const jobId = uuidv4();
-  const job   = executeScan(jobId, type || 'full-scan', { target, depth, threads, command });
+  const job   = executeScan(jobId, type, { target, depth, threads, command });
   if (!job) return res.status(400).json({ error: 'Failed to start scan' });
 
   res.json({ jobId, status: 'started', pid: job.pid });
 });
 
-// Stop job
 app.post('/api/scan/stop/:jobId', (req, res) => {
   const job = activeJobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-
-  try {
-    // Kill the entire process group
-    process.kill(-job.pid, 'SIGTERM');
-  } catch {
-    try { process.kill(job.pid, 'SIGTERM'); } catch {}
-  }
-
+  if (!job) return res.status(404).json({ error: 'Job not found or already finished' });
+  try { process.kill(job.pid, 'SIGTERM'); } catch {}
   job.status = 'stopped';
   activeJobs.delete(req.params.jobId);
   broadcast({ type: 'job-stopped', jobId: req.params.jobId, timestamp: new Date().toISOString() });
   res.json({ status: 'stopped' });
 });
 
-// Get job output buffer (for reconnect / replay)
+// Replay endpoint — returns buffered output for a job
 app.get('/api/jobs/:jobId/output', (req, res) => {
   const job = jobHistory.find(j => j.id === req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-  const from = parseInt(req.query.from) || 0;
+  if (!job) return res.status(404).json({ error: 'Not found' });
+  const from = Math.max(0, parseInt(req.query.from) || 0);
   res.json({
     jobId:     job.id,
     status:    job.status,
@@ -367,12 +354,12 @@ app.get('/api/jobs/active', (req, res) => {
 });
 
 app.get('/api/jobs/history', (req, res) => {
-  const limit = parseInt(req.query.limit) || 20;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   res.json(jobHistory.slice(0, limit).map(j => ({
     id: j.id, type: j.type, status: j.status,
     startTime: j.startTime, endTime: j.endTime,
     exitCode: j.exitCode, options: j.options,
-    lineCount: j.lineCount, outputFiles: j.outputFiles || []
+    lineCount: j.lineCount, outputFiles: j.outputFiles
   })));
 });
 
@@ -382,122 +369,92 @@ app.get('/api/outputs', (req, res) => {
     const dirs = fs.readdirSync(OUTPUT_DIR)
       .filter(d => { try { return fs.statSync(path.join(OUTPUT_DIR, d)).isDirectory(); } catch { return false; } })
       .map(d => {
-        const dirPath = path.join(OUTPUT_DIR, d);
-        const stat    = fs.statSync(dirPath);
-        const files   = [];
-        walkDir(dirPath, files);
-        return {
-          name:      d,
-          path:      dirPath,
-          created:   stat.birthtime.toISOString(),
-          modified:  stat.mtime.toISOString(),
-          fileCount: files.length,
-          totalSize: files.reduce((s, f) => s + f.size, 0)
-        };
+        const dp = path.join(OUTPUT_DIR, d);
+        const st = fs.statSync(dp);
+        const fl = []; walkDir(dp, fl);
+        return { name: d, path: dp, created: st.birthtime.toISOString(), modified: st.mtime.toISOString(), fileCount: fl.length, totalSize: fl.reduce((s, f) => s + f.size, 0) };
       })
       .sort((a, b) => new Date(b.modified) - new Date(a.modified));
     res.json(dirs);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/outputs/:dir/files', (req, res) => {
-  const dirPath = path.join(OUTPUT_DIR, req.params.dir);
-  if (!fs.existsSync(dirPath)) return res.status(404).json({ error: 'Not found' });
-  const files = [];
-  walkDir(dirPath, files);
-  res.json(files);
+  const dp = path.join(OUTPUT_DIR, req.params.dir);
+  if (!fs.existsSync(dp)) return res.status(404).json({ error: 'Not found' });
+  const f = []; walkDir(dp, f);
+  res.json(f);
 });
 
 app.get('/api/file', (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-  const lines = parseInt(req.query.lines) || 500;
+  const fp = req.query.path;
+  if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
   try {
-    const content  = fs.readFileSync(filePath, 'utf8');
-    const allLines = content.split('\n');
-    res.json({
-      path: filePath, totalLines: allLines.length,
-      content: allLines.slice(0, lines).join('\n'), truncated: allLines.length > lines
-    });
+    const lines = parseInt(req.query.lines) || 500;
+    const all   = fs.readFileSync(fp, 'utf8').split('\n');
+    res.json({ path: fp, totalLines: all.length, content: all.slice(0, lines).join('\n'), truncated: all.length > lines });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/download', (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-  res.download(filePath);
+  const fp = req.query.path;
+  if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
+  res.download(fp);
 });
 
 app.post('/api/upload/targets', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'No file' });
   res.json({ filename: req.file.originalname, path: req.file.path, size: req.file.size });
 });
 
-// Custom command execution (streaming via WebSocket exec channel)
+// Exec (non-streaming — for quick commands)
 app.post('/api/exec', (req, res) => {
-  const { command, timeout = 30000 } = req.body;
+  const { command, timeout: tmo = 30000 } = req.body;
   if (!command) return res.status(400).json({ error: 'Command required' });
-
-  const proc = spawn('/bin/bash', ['-c', command], {
-    env: { ...process.env, PATH: process.env.PATH + ':/usr/local/bin:/opt/venv/bin', PYTHONUNBUFFERED: '1' },
-    timeout
+  const p = spawn('/bin/bash', ['-c', command], {
+    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`, PYTHONUNBUFFERED: '1' },
+    timeout: tmo
   });
-
-  let stdout = '', stderr = '';
-  proc.stdout.on('data', d => stdout += d);
-  proc.stderr.on('data', d => stderr += d);
-  proc.on('close', code => {
-    res.json({ exitCode: code, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 5000) });
-  });
-  proc.on('error', err => res.status(500).json({ error: err.message }));
+  let out = '', err = '';
+  p.stdout.on('data', d => { out += d; });
+  p.stderr.on('data', d => { err += d; });
+  p.on('close', code => res.json({ exitCode: code, stdout: out.slice(0, 10000), stderr: err.slice(0, 5000) }));
+  p.on('error', e => res.status(500).json({ error: e.message }));
 });
 
-// Streaming exec via SSE (for Terminal page live output)
+// SSE streaming exec (terminal page)
 app.get('/api/exec/stream', (req, res) => {
   const command = req.query.cmd;
   if (!command) return res.status(400).end();
-
   res.setHeader('Content-Type',  'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection',    'keep-alive');
   res.flushHeaders();
-
-  const proc = spawn('/bin/bash', ['-c', command], {
-    env: { ...process.env, PATH: process.env.PATH + ':/usr/local/bin:/opt/venv/bin', PYTHONUNBUFFERED: '1' }
+  const p = spawn('/bin/bash', ['-c', command], {
+    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`, PYTHONUNBUFFERED: '1' }
   });
-
-  const send = (type, text) => {
-    res.write(`data: ${JSON.stringify({ type, text })}\n\n`);
-  };
-
-  proc.stdout.on('data', d => d.toString().split('\n').forEach(l => l && send('stdout', l)));
-  proc.stderr.on('data', d => d.toString().split('\n').forEach(l => l && send('stderr', l)));
-  proc.on('close', code => { send('exit', String(code)); res.end(); });
-  req.on('close', () => { try { proc.kill('SIGTERM'); } catch {} });
+  const emit = (type, text) => res.write(`data: ${JSON.stringify({ type, text })}\n\n`);
+  p.stdout.on('data', d => d.toString().split('\n').forEach(l => emit('stdout', l)));
+  p.stderr.on('data', d => d.toString().split('\n').forEach(l => emit('stderr', l)));
+  p.on('close', code => { emit('exit', String(code)); res.end(); });
+  req.on('close', () => { try { p.kill(); } catch {} });
 });
 
 app.get('/api/system', (req, res) => {
-  const proc = spawn('sh', ['-c', 'df -h / && free -h && uptime']);
-  let output = '';
-  proc.stdout.on('data', d => output += d);
-  proc.on('close', () => {
-    res.json({
-      activeJobs: activeJobs.size, totalJobs: jobHistory.length,
-      uptime: process.uptime(), stats: output, timestamp: new Date().toISOString()
-    });
-  });
+  const p = spawn('sh', ['-c', 'df -h / && free -h && uptime']);
+  let out = '';
+  p.stdout.on('data', d => { out += d; });
+  p.on('close', () => res.json({
+    activeJobs: activeJobs.size, totalJobs: jobHistory.length,
+    uptime: process.uptime(), stats: out, timestamp: new Date().toISOString()
+  }));
 });
 
 // ── WebSocket handler ────────────────────────────────────────
 wss.on('connection', (ws, req) => {
-  console.log(`[WS] Client connected from ${req.socket.remoteAddress}`);
+  clientSubs.set(ws, new Set());
+  console.log(`[WS] connect  ${req.socket.remoteAddress}`);
 
-  // Init subscription set
-  clientSubscriptions.set(ws, new Set());
-
-  // Send current state
   ws.send(JSON.stringify({
     type:       'connected',
     activeJobs: activeJobs.size,
@@ -507,78 +464,73 @@ wss.on('connection', (ws, req) => {
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw);
-
       switch (msg.type) {
+
         case 'ping':
           ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
           break;
 
-        // Client subscribes to a specific job (to receive its output lines)
-        case 'subscribe':
-          if (msg.jobId) {
-            clientSubscriptions.get(ws)?.add(msg.jobId);
+        case 'subscribe': {
+          if (!msg.jobId) break;
+          clientSubs.get(ws)?.add(msg.jobId);
 
-            // Replay buffered output so late-joiners catch up immediately
-            const job = jobHistory.find(j => j.id === msg.jobId);
-            if (job && job.output.length > 0) {
-              const from = parseInt(msg.from) || 0;
-              job.output.slice(from).forEach(entry => {
-                ws.send(JSON.stringify({
-                  type:      'job-output',
-                  jobId:     job.id,
-                  line:      entry.text,
-                  stream:    entry.stream,
-                  lineNum:   job.output.indexOf(entry) + 1,
-                  replay:    true,
-                  timestamp: entry.t
-                }));
-              });
-              // If job already finished, send completion too
-              if (job.status !== 'running') {
-                ws.send(JSON.stringify({
-                  type:        'job-complete',
-                  jobId:       job.id,
-                  exitCode:    job.exitCode,
-                  status:      job.status,
-                  outputFiles: job.outputFiles || [],
-                  lineCount:   job.lineCount,
-                  replay:      true,
-                  timestamp:   job.endTime
-                }));
-              }
-            }
+          // Replay buffered output immediately
+          const job = jobHistory.find(j => j.id === msg.jobId);
+          if (!job) break;
+
+          const from = Math.max(0, parseInt(msg.from) || 0);
+          const slice = job.output.slice(from);
+
+          // Send replay lines as a batch first
+          slice.forEach((entry, idx) => {
+            ws.send(JSON.stringify({
+              type:      'job-output',
+              jobId:     job.id,
+              line:      entry.text,
+              stream:    entry.stream,
+              lineNum:   from + idx + 1,
+              replay:    true,
+              timestamp: entry.t
+            }));
+          });
+
+          // If job already finished, replay complete event
+          if (job.status !== 'running') {
+            ws.send(JSON.stringify({
+              type:        'job-complete',
+              jobId:       job.id,
+              exitCode:    job.exitCode,
+              status:      job.status,
+              outputFiles: job.outputFiles,
+              lineCount:   job.lineCount,
+              replay:      true,
+              timestamp:   job.endTime
+            }));
           }
           break;
+        }
 
         case 'unsubscribe':
-          if (msg.jobId) clientSubscriptions.get(ws)?.delete(msg.jobId);
+          if (msg.jobId) clientSubs.get(ws)?.delete(msg.jobId);
           break;
       }
-    } catch (e) { /* ignore malformed messages */ }
+    } catch { /* ignore malformed */ }
   });
 
-  ws.on('close', () => {
-    clientSubscriptions.delete(ws);
-    console.log('[WS] Client disconnected');
-  });
-
-  ws.on('error', () => {
-    clientSubscriptions.delete(ws);
-  });
+  ws.on('close',  () => { clientSubs.delete(ws); console.log('[WS] disconnect'); });
+  ws.on('error',  () => { clientSubs.delete(ws); });
 });
 
-// ── Catch-all → SPA ─────────────────────────────────────────
+// ── Catch-all SPA ────────────────────────────────────────────
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ── Start server ─────────────────────────────────────────────
+// ── Start ────────────────────────────────────────────────────
 server.listen(PORT, '0.0.0.0', () => {
   console.log('╔══════════════════════════════════════════════╗');
-  console.log('║   🕷️  Crawler Toolkit 2026 Dashboard          ║');
-  console.log(`║   Listening on http://0.0.0.0:${PORT}           ║`);
+  console.log('║   🕷️  Crawler Toolkit 2026  Dashboard v3      ║');
+  console.log(`║   http://0.0.0.0:${PORT}                        ║`);
   console.log('╚══════════════════════════════════════════════╝');
-  checkTools().then(tools => {
-    console.log(`[*] Tools available: ${tools.filter(t => t.available).length}/${tools.length}`);
-  });
+  checkTools().then(t => console.log(`[*] Tools: ${t.filter(x=>x.available).length}/${t.length} available`));
 });

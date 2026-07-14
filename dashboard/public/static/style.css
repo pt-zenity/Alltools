@@ -1409,6 +1409,7 @@ html, body {
 /* ── Scan Output Panel ──────────────────────── */
 #scan-output-panel {
   display: none;
+  flex-direction: column;
   margin-top: 20px;
   border: 1px solid var(--glass-border-accent);
   border-radius: var(--radius);
@@ -1606,3 +1607,132 @@ html, body {
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .docs-grid  { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   v3 PATCH — new class aliases used by app.js v3
+   ============================================================ */
+
+/* ── line-<stream> aliases (app.js v3 uses line-stdout etc.) ── */
+.terminal-line.line-stdout  .ttext { color: #c8f0d8; }
+.terminal-line.line-stderr  .ttext { color: #fca5a5; }
+.terminal-line.line-info    .ttext { color: #67e8f9; }
+.terminal-line.line-success .ttext { color: #86efac; font-weight: 600; }
+.terminal-line.line-warning .ttext { color: #fde68a; }
+
+/* Also alias for old terminal-text class */
+.terminal-line .terminal-text { color: inherit; }
+
+/* ── .ttext — text span used in v3 ─────────────────────────── */
+.ttext { white-space: pre-wrap; word-break: break-all; }
+
+/* ── .lp — line prefix badges (app.js v3) ─────────────────── */
+.lp {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  width: 32px;
+  flex-shrink: 0;
+  text-align: right;
+  margin-right: 10px;
+  padding-top: 1px;
+  opacity: 0.70;
+  letter-spacing: 0.04em;
+}
+.lp-err { color: #f87171; }
+.lp-inf { color: #22d3ee; text-shadow: 0 0 6px rgba(34,211,238,0.5); }
+.lp-ok  { color: #4ade80; text-shadow: 0 0 6px rgba(74,222,128,0.5); }
+.lp-wrn { color: #fbbf24; }
+
+/* ── live-status.starting state ────────────────────────────── */
+.live-status.starting {
+  background: rgba(245,158,11,0.15);
+  color: var(--yellow);
+  border: 1px solid rgba(245,158,11,0.30);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* ── URL links inside terminal ──────────────────────────────── */
+.url-link {
+  color: var(--cyan);
+  text-decoration: none;
+  opacity: 0.9;
+  border-bottom: 1px solid rgba(6,182,212,0.30);
+  transition: all 0.15s;
+}
+.url-link:hover {
+  opacity: 1;
+  color: #67e8f9;
+  border-bottom-color: var(--cyan);
+  text-shadow: 0 0 8px rgba(6,182,212,0.4);
+}
+
+/* ── docs table ─────────────────────────────────────────────── */
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.docs-table th, .docs-table td {
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  text-align: left;
+}
+.docs-table th { background: var(--glass-bg-md); color: var(--accent); }
+.docs-table tr:hover td { background: var(--glass-bg); }
+.docs-table code { font-family: var(--font-mono); font-size: 11px; }
+
+/* ── tool detail cmd block ──────────────────────────────────── */
+.tool-detail-cmd {
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 6px;
+  border-left: 2px solid var(--accent);
+}
+.tool-detail-cmd code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #a5b4fc;
+  word-break: break-all;
+}
+
+/* ── terminal page cmd line ─────────────────────────────────── */
+.terminal-line.terminal-cmd {
+  background: rgba(99,102,241,0.08);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: 2px 0;
+}
+.terminal-line.terminal-cmd .terminal-prompt {
+  color: var(--accent);
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+/* ── output-panel when flex ─────────────────────────────────── */
+#scan-output-panel[style*="flex"] {
+  display: flex !important;
+  flex-direction: column;
+}
+
+/* ── output-meta spacing ────────────────────────────────────── */
+.output-meta {
+  display: flex;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+/* ── output-panel-controls gap fix ─────────────────────────── */
+.output-panel-controls {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.output-panel-controls .btn-sm { padding: 3px 10px; font-size: 11px; }
+

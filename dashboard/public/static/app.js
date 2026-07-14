@@ -1,51 +1,52 @@
 /**
- * Web Crawler Toolkit 2026 - Frontend Application
- * FIXED: Real-time streaming output via WebSocket subscribe/replay
+ * Web Crawler Toolkit 2026 - Frontend  v3
+ * STREAMING FIX:
+ *  1. Subscribe happens AFTER server confirms job, BEFORE any terminal clear
+ *  2. appendOutputLine never silently drops lines (removed over-aggressive guards)
+ *  3. job-started no longer clears terminal (terminal is prepared in startScan only)
+ *  4. Replay lines rendered immediately, then live lines continue
+ *  5. WS reconnect re-subscribes to currentScanJobId from last known line
  */
 
-// ── State ─────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────
 const state = {
-  ws: null,
-  wsReady: false,
-  wsReconnectTimer: null,
-  currentPage: 'dashboard',
-  activeJobs: new Map(),
-  jobHistory: [],
-  tools: [],
-  outputs: [],
-  currentScanJobId: null,
-  terminalHistory: [],
-  selectedFile: null,
-  scanType: 'full-scan',
-  refreshIntervals: {},
-  // live output tracking
-  outputLineCount: 0,
-  outputAutoScroll: true,
-  maxOutputLines: 3000,
+  ws:                 null,
+  wsReady:            false,
+  wsReconnectTimer:   null,
+  currentPage:        'dashboard',
+  activeJobs:         new Map(),
+  jobHistory:         [],
+  tools:              [],
+  outputs:            [],
+  currentScanJobId:   null,
+  outputLineCount:    0,
+  outputAutoScroll:   true,
+  maxOutputLines:     5000,
+  refreshIntervals:   {},
 };
 
-// ── Tool Definitions ──────────────────────────
+// ── Tool info ─────────────────────────────────────────────────
 const TOOL_INFO = {
-  katana:       { icon: '⚡', color: '#6366f1', desc: 'Next-generation crawling framework by ProjectDiscovery. Headless JS support, smart filtering, and structured output.', tags: ['Go','Crawling','JS Rendering','ProjectDiscovery'], cmd: 'katana -u <URL> -d 3 -c 50 -jc -o output.txt' },
-  gau:          { icon: '🌐', color: '#22c55e', desc: 'Get All URLs — fetches known URLs from Wayback Machine, OTX, URLScan, and CommonCrawl archives.', tags: ['Go','Passive Recon','Wayback','CommonCrawl'], cmd: 'echo "domain.com" | gau --threads 30 --providers wayback,commoncrawl' },
-  waymore:      { icon: '📡', color: '#f59e0b', desc: 'Advanced URL collection tool combining multiple web archive sources with smart filtering and deduplication.', tags: ['Python','URL Collection','Passive','Multi-source'], cmd: 'waymore -i domain.com -mode U -oU output.txt' },
-  gospider:     { icon: '🕷️', color: '#06b6d4', desc: 'Fast web spider with sitemap parsing, robots.txt discovery, and JS endpoint extraction capabilities.', tags: ['Go','Spidering','Robots.txt','Sitemap'], cmd: 'gospider -s <URL> -o output/ -c 50 -d 3 --js --sitemap' },
-  xnLinkFinder: { icon: '🔗', color: '#a855f7', desc: 'Python-based link finder that discovers endpoints in HTML, JS, and other response bodies via regex patterns.', tags: ['Python','Link Extraction','JS Analysis','Regex'], cmd: 'xnLinkFinder -i <URL> -op output.txt -sp <URL> -d 3' },
-  httpx:        { icon: '🔍', color: '#ef4444', desc: 'Fast HTTP toolkit for probing URLs. Detects status codes, titles, technologies, and web server information.', tags: ['Go','HTTP Probing','Tech Detection','ProjectDiscovery'], cmd: 'httpx -l urls.txt -o alive.txt -title -sc -ct -server' },
-  subfinder:    { icon: '🌿', color: '#22c55e', desc: 'Passive subdomain discovery tool using 100+ data sources including DNS resolvers and certificate logs.', tags: ['Go','Subdomains','Passive','OSINT'], cmd: 'subfinder -d domain.com -o subdomains.txt' },
-  nuclei:       { icon: '☢️', color: '#f59e0b', desc: 'Fast and customizable vulnerability scanner based on YAML templates. 10000+ community templates.', tags: ['Go','Vulnerability','Templates','ProjectDiscovery'], cmd: 'nuclei -u <URL> -t cves/ -o results.txt' },
-  dnsx:         { icon: '🧮', color: '#06b6d4', desc: 'Fast and multi-purpose DNS toolkit for running various probes, DNS bruteforcing, and zone transfers.', tags: ['Go','DNS','Recon','ProjectDiscovery'], cmd: 'dnsx -d domain.com -a -aaaa -cname -mx -o dns.txt' },
-  naabu:        { icon: '🔌', color: '#6366f1', desc: 'Fast port scanner built around SYN/CONNECT probes with service discovery and rate limiting.', tags: ['Go','Port Scanner','Network','ProjectDiscovery'], cmd: 'naabu -host domain.com -p 80,443,8080 -o ports.txt' },
-  waybackurls:  { icon: '⏮️', color: '#a855f7', desc: 'Fetch all known URLs from the Wayback Machine for a given domain. Simple and fast.', tags: ['Go','Wayback','URLs','tomnomnom'], cmd: 'echo "domain.com" | waybackurls > urls.txt' },
-  anew:         { icon: '✨', color: '#22c55e', desc: 'Append new lines to file, skipping duplicates. Essential for pipeline-based URL collection workflows.', tags: ['Go','Dedup','Pipeline','tomnomnom'], cmd: 'cat new-urls.txt | anew all-urls.txt' },
-  gf:           { icon: '🎯', color: '#ef4444', desc: 'Grep with patterns — find XSS, SQLi, SSRF, LFI, and other vulnerability patterns in URL lists.', tags: ['Go','Pattern Match','Vuln Patterns','tomnomnom'], cmd: 'gf xss urls.txt | gf sqli | tee vuln-urls.txt' },
-  uro:          { icon: '🧹', color: '#06b6d4', desc: 'URL deduplication tool that intelligently removes duplicate and low-value URLs from collections.', tags: ['Python','Dedup','URL Filter','Optimization'], cmd: 'cat urls.txt | uro > deduped.txt' },
-  unfurl:       { icon: '🔓', color: '#f59e0b', desc: 'Pull out bits of URLs. Extract paths, domains, parameters, values, and more from URL lists.', tags: ['Go','URL Parsing','Extraction','tomnomnom'], cmd: 'cat urls.txt | unfurl domains' },
-  node:         { icon: '🟢', color: '#22c55e', desc: 'Node.js runtime for JavaScript execution. Powering the dashboard and custom JS-based scrapers.', tags: ['Runtime','JavaScript','V8','Dashboard'], cmd: 'node --version' },
-  python3:      { icon: '🐍', color: '#f59e0b', desc: 'Python 3 runtime for Python-based tools like waymore, xnLinkFinder, and uro.', tags: ['Runtime','Python','Scripting'], cmd: 'python3 --version' }
+  katana:       { icon:'⚡', color:'#6366f1', desc:'Next-gen crawling framework. Headless JS, smart filtering, structured output.',         tags:['Go','Crawling','JS Rendering'],       cmd:'katana -u <URL> -d 3 -c 50 -jc -o output.txt' },
+  gau:          { icon:'🌐', color:'#22c55e', desc:'Get All URLs from Wayback, OTX, URLScan, CommonCrawl archives.',                        tags:['Go','Passive Recon','Wayback'],        cmd:'echo "domain.com" | gau --threads 30' },
+  waymore:      { icon:'📡', color:'#f59e0b', desc:'Advanced URL collection combining multiple web archive sources.',                        tags:['Python','URL Collection','Passive'],   cmd:'waymore -i domain.com -mode U -oU output.txt' },
+  gospider:     { icon:'🕷️', color:'#06b6d4', desc:'Fast web spider with sitemap, robots.txt, and JS endpoint extraction.',                 tags:['Go','Spidering','Robots.txt'],         cmd:'gospider -s <URL> -o output/ -c 50 -d 3 --js' },
+  xnLinkFinder: { icon:'🔗', color:'#a855f7', desc:'Python link finder — discovers endpoints in HTML/JS via regex patterns.',               tags:['Python','Link Extraction','Regex'],    cmd:'xnLinkFinder -i <URL> -op output.txt -d 3' },
+  httpx:        { icon:'🔍', color:'#ef4444', desc:'Fast HTTP toolkit for probing — status codes, titles, technologies.',                   tags:['Go','HTTP Probing','Tech Detection'],  cmd:'httpx -l urls.txt -o alive.txt -title -sc' },
+  subfinder:    { icon:'🌿', color:'#22c55e', desc:'Passive subdomain discovery using 100+ sources — DNS, certs.',                          tags:['Go','Subdomains','Passive'],           cmd:'subfinder -d domain.com -o subs.txt' },
+  nuclei:       { icon:'☢️', color:'#f59e0b', desc:'Fast YAML-template vulnerability scanner. 10 000+ community templates.',               tags:['Go','Vulnerability','Templates'],      cmd:'nuclei -u <URL> -t cves/ -o results.txt' },
+  dnsx:         { icon:'🧮', color:'#06b6d4', desc:'Multi-purpose DNS toolkit — probes, bruteforce, zone transfers.',                       tags:['Go','DNS','Recon'],                    cmd:'dnsx -d domain.com -a -aaaa -cname -o dns.txt' },
+  naabu:        { icon:'🔌', color:'#6366f1', desc:'Fast port scanner using SYN/CONNECT probes with service discovery.',                   tags:['Go','Port Scanner','Network'],         cmd:'naabu -host domain.com -p 80,443,8080' },
+  waybackurls:  { icon:'⏮️', color:'#a855f7', desc:'Fetch all known URLs from Wayback Machine for a given domain.',                        tags:['Go','Wayback','URLs'],                 cmd:'echo "domain.com" | waybackurls > urls.txt' },
+  anew:         { icon:'✨', color:'#22c55e', desc:'Append new lines, skip duplicates — essential for pipeline URL collection.',            tags:['Go','Dedup','Pipeline'],               cmd:'cat new.txt | anew all.txt' },
+  gf:           { icon:'🎯', color:'#ef4444', desc:'Grep with patterns — find XSS, SQLi, SSRF, LFI patterns in URL lists.',                tags:['Go','Pattern Match','Vuln Patterns'],  cmd:'gf xss urls.txt | gf sqli' },
+  uro:          { icon:'🧹', color:'#06b6d4', desc:'Intelligent URL deduplication and filtering.',                                          tags:['Python','Dedup','URL Filter'],         cmd:'cat urls.txt | uro > deduped.txt' },
+  unfurl:       { icon:'🔓', color:'#f59e0b', desc:'Pull bits of URLs — extract paths, domains, params, values.',                          tags:['Go','URL Parsing','Extraction'],       cmd:'cat urls.txt | unfurl domains' },
+  node:         { icon:'🟢', color:'#22c55e', desc:'Node.js runtime — powering the dashboard.',                                             tags:['Runtime','JavaScript'],               cmd:'node --version' },
+  python3:      { icon:'🐍', color:'#f59e0b', desc:'Python 3 — runtime for waymore, xnLinkFinder, uro.',                                  tags:['Runtime','Python'],                   cmd:'python3 --version' },
 };
 
-// ── Initialize ────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initClock();
   initNavigation();
@@ -55,43 +56,38 @@ document.addEventListener('DOMContentLoaded', () => {
   initTerminal();
   initOutputControls();
   loadDashboard();
-
   state.refreshIntervals.dashboard = setInterval(loadDashboard, 15000);
 });
 
-// ── Clock ─────────────────────────────────────
+// ── Clock ──────────────────────────────────────────────────────
 function initClock() {
-  const update = () => {
-    const now = new Date();
+  const tick = () => {
     const el = document.getElementById('clock');
-    if (el) el.textContent = now.toUTCString().replace(' GMT','').split(',')[1]?.trim().substring(0,17) || '';
+    if (el) el.textContent = new Date().toUTCString().split(' ').slice(1,5).join(' ');
   };
-  update();
-  setInterval(update, 1000);
+  tick();
+  setInterval(tick, 1000);
 }
 
-// ── Navigation ────────────────────────────────
+// ── Navigation ─────────────────────────────────────────────────
 function initNavigation() {
   document.querySelectorAll('.nav-item').forEach(item => {
-    item.addEventListener('click', e => {
-      e.preventDefault();
-      navigateTo(item.dataset.page);
-    });
+    item.addEventListener('click', e => { e.preventDefault(); navigateTo(item.dataset.page); });
   });
 }
 
 function navigateTo(page) {
   document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-  const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-  if (navItem) navItem.classList.add('active');
+  const nav = document.querySelector(`.nav-item[data-page="${page}"]`);
+  if (nav) nav.classList.add('active');
 
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const pageEl = document.getElementById(`page-${page}`);
-  if (pageEl) pageEl.classList.add('active');
+  const pg = document.getElementById(`page-${page}`);
+  if (pg) pg.classList.add('active');
 
   const titles = { dashboard:'Dashboard', scan:'New Scan', jobs:'Jobs', results:'Results', tools:'Tools', terminal:'Terminal', docs:'Documentation' };
-  const titleEl = document.getElementById('page-title');
-  if (titleEl) titleEl.textContent = titles[page] || page;
+  const ttl = document.getElementById('page-title');
+  if (ttl) ttl.textContent = titles[page] || page;
   state.currentPage = page;
 
   if (page === 'tools'   && state.tools.length === 0) loadTools();
@@ -100,37 +96,31 @@ function navigateTo(page) {
   if (page === 'docs')    loadDocs();
 }
 
-// ── Sidebar Toggle ────────────────────────────
 function initSidebarToggle() {
   const btn = document.getElementById('sidebar-toggle');
-  if (btn) btn.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('collapsed');
-  });
+  if (btn) btn.addEventListener('click', () => document.getElementById('sidebar')?.classList.toggle('collapsed'));
 }
 
-// ── WebSocket ─────────────────────────────────
+// ── WebSocket ──────────────────────────────────────────────────
 function initWebSocket() {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
-
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}`;
-
-  state.ws = new WebSocket(wsUrl);
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  state.ws = new WebSocket(`${proto}//${window.location.host}`);
   state.wsReady = false;
 
   state.ws.onopen = () => {
     state.wsReady = true;
     setWsStatus('connected');
-    if (state.wsReconnectTimer) { clearTimeout(state.wsReconnectTimer); state.wsReconnectTimer = null; }
-
-    // Re-subscribe to current job if there is one running
+    clearTimeout(state.wsReconnectTimer);
+    state.wsReconnectTimer = null;
+    // Re-subscribe to active job from last known line on reconnect
     if (state.currentScanJobId) {
-      subscribeToJob(state.currentScanJobId, state.outputLineCount);
+      wsSend({ type: 'subscribe', jobId: state.currentScanJobId, from: state.outputLineCount });
     }
   };
 
-  state.ws.onmessage = event => {
-    try { handleWsMessage(JSON.parse(event.data)); } catch {}
+  state.ws.onmessage = ev => {
+    try { handleWsMessage(JSON.parse(ev.data)); } catch (e) { console.error('[WS] parse error', e); }
   };
 
   state.ws.onclose = () => {
@@ -151,78 +141,72 @@ function wsSend(obj) {
   }
 }
 
-function subscribeToJob(jobId, fromLine = 0) {
-  wsSend({ type: 'subscribe', jobId, from: fromLine });
+function subscribeToJob(jobId, from = 0) {
+  wsSend({ type: 'subscribe', jobId, from });
 }
 
-function setWsStatus(status) {
+function setWsStatus(s) {
   const dot  = document.getElementById('ws-dot');
-  const text = document.getElementById('ws-text');
-  if (dot)  dot.className  = `ws-dot ${status}`;
-  if (text) text.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
+  const txt  = document.getElementById('ws-text');
+  if (dot) dot.className  = `ws-dot ${s}`;
+  if (txt) txt.textContent = s === 'connected' ? 'Connected' : 'Disconnected';
 }
 
-// ── WebSocket message handler ─────────────────
-function handleWsMessage(data) {
-  switch (data.type) {
+// ── WebSocket message handler ──────────────────────────────────
+function handleWsMessage(msg) {
+  switch (msg.type) {
+
     case 'connected':
+      // server acknowledged
       break;
 
     case 'job-started':
-      state.activeJobs.set(data.jobId, {
-        id: data.jobId, type: data.scanType,
-        target: data.target, status: 'running', startTime: data.timestamp, lineCount: 0
+      state.activeJobs.set(msg.jobId, {
+        id: msg.jobId, type: msg.scanType, target: msg.target,
+        status: 'running', startTime: msg.timestamp, lineCount: 0
       });
       updateJobBadge();
-
-      // If this is the current scan, subscribe and show panel
-      if (state.currentScanJobId === data.jobId) {
-        subscribeToJob(data.jobId);
-        showOutputPanel(data.jobId, data.scanType, data.target);
+      // NOTE: do NOT clear terminal here — startScan() already prepared it
+      // Just update the header labels and mark running
+      if (state.currentScanJobId === msg.jobId) {
+        setScanRunning(true);
+        const lbl = document.getElementById('live-scan-label');
+        if (lbl) lbl.textContent = `${msg.scanType} → ${msg.target || ''}`;
+        const jid = document.getElementById('live-job-id');
+        if (jid) jid.textContent = msg.jobId.substring(0, 8);
       }
-
-      toast(`Scan started: ${data.target || data.jobId.substring(0,8)}`, 'info');
+      toast(`Scan started: ${msg.target || msg.jobId.substring(0,8)}`, 'info');
       if (state.currentPage === 'jobs') loadJobs();
       break;
 
-    case 'job-output':
-      if (data.replay) {
-        // Replayed lines: append only if we're actually watching this job
-        if (state.currentScanJobId === data.jobId) {
-          appendOutputLine(data.line, data.stream, true);
+    case 'job-output': {
+      // Both replay (msg.replay=true) and live lines go through the same path
+      if (state.currentScanJobId === msg.jobId) {
+        appendOutputLine(msg.line, msg.stream, msg.replay === true);
+        if (!msg.replay) {
+          state.outputLineCount = msg.lineNum || state.outputLineCount + 1;
+          updateOutputStats(state.outputLineCount);
         }
-      } else {
-        // Live line
-        if (state.currentScanJobId === data.jobId) {
-          appendOutputLine(data.line, data.stream);
-          updateOutputStats(data.lineNum);
-        }
-        // Update jobs page live counter
-        const activeJobEl = document.getElementById(`job-linecount-${data.jobId}`);
-        if (activeJobEl) activeJobEl.textContent = `${data.lineNum} lines`;
       }
+      // Update live counter in jobs page
+      const ctr = document.getElementById(`job-linecount-${msg.jobId}`);
+      if (ctr && !msg.replay) ctr.textContent = `${msg.lineNum} lines`;
       break;
+    }
 
     case 'job-complete':
-      state.activeJobs.delete(data.jobId);
+      state.activeJobs.delete(msg.jobId);
       updateJobBadge();
-
-      if (state.currentScanJobId === data.jobId) {
-        finalizeOutputPanel(data);
-      }
-
-      toast(
-        `Scan finished! ${data.lineCount} lines · exit ${data.exitCode}`,
-        data.exitCode === 0 ? 'success' : 'warning'
-      );
+      if (state.currentScanJobId === msg.jobId) finalizeOutputPanel(msg);
+      toast(`Scan done · ${msg.lineCount} lines · exit ${msg.exitCode}`, msg.exitCode === 0 ? 'success' : 'warning');
       if (state.currentPage === 'jobs') loadJobs();
       loadDashboard();
       break;
 
     case 'job-stopped':
-      state.activeJobs.delete(data.jobId);
+      state.activeJobs.delete(msg.jobId);
       updateJobBadge();
-      if (state.currentScanJobId === data.jobId) {
+      if (state.currentScanJobId === msg.jobId) {
         appendOutputLine('⚠ Scan stopped by user.', 'warning');
         setScanRunning(false);
       }
@@ -231,130 +215,97 @@ function handleWsMessage(data) {
       break;
 
     case 'job-error':
-      toast(`Error: ${data.message}`, 'error');
-      if (state.currentScanJobId === data.jobId) {
-        appendOutputLine(`✕ Error: ${data.message}`, 'stderr');
+      if (state.currentScanJobId === msg.jobId) {
+        appendOutputLine(`✕ Error: ${msg.message}`, 'stderr');
         setScanRunning(false);
       }
+      toast(`Error: ${msg.message}`, 'error');
       break;
   }
 }
 
-// ── Output Panel ──────────────────────────────
+// ── Output panel helpers ────────────────────────────────────────
 
 function initOutputControls() {
-  // Auto-scroll toggle
   const terminal = document.getElementById('output-terminal');
   if (terminal) {
     terminal.addEventListener('scroll', () => {
-      const atBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40;
+      const atBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 60;
       state.outputAutoScroll = atBottom;
       const btn = document.getElementById('autoscroll-btn');
-      if (btn) btn.classList.toggle('active', state.outputAutoScroll);
+      if (btn) btn.classList.toggle('active', atBottom);
     });
   }
 }
 
-function showOutputPanel(jobId, scanType, target) {
-  const panel = document.getElementById('scan-output-panel');
-  if (!panel) return;
-
-  panel.style.display = 'block';
-
-  // Update header info
-  const jobIdEl = document.getElementById('live-job-id');
-  if (jobIdEl) jobIdEl.textContent = jobId.substring(0, 8);
-
-  const scanLabelEl = document.getElementById('live-scan-label');
-  if (scanLabelEl) scanLabelEl.textContent = `${scanType} → ${target || ''}`;
-
-  setScanRunning(true);
-
-  // Clear terminal
-  const terminal = document.getElementById('output-terminal');
-  if (terminal) {
-    terminal.innerHTML = '';
-    state.outputLineCount = 0;
-    state.outputAutoScroll = true;
-  }
-
-  updateOutputStats(0);
-  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
 function setScanRunning(running) {
-  const stopBtn  = document.getElementById('stop-btn');
-  const statusEl = document.getElementById('live-scan-status');
-
-  if (stopBtn)  stopBtn.disabled = !running;
-  if (statusEl) {
-    statusEl.textContent  = running ? '● RUNNING' : '■ DONE';
-    statusEl.className    = `live-status ${running ? 'running' : 'done'}`;
+  const stop = document.getElementById('stop-btn');
+  const stat = document.getElementById('live-scan-status');
+  if (stop) stop.disabled = !running;
+  if (stat) {
+    stat.textContent = running ? '● RUNNING' : '■ DONE';
+    stat.className   = `live-status ${running ? 'running' : 'done'}`;
   }
 }
 
-function updateOutputStats(lineNum) {
-  state.outputLineCount = lineNum;
+function updateOutputStats(n) {
+  state.outputLineCount = n;
   const el = document.getElementById('output-line-count');
-  if (el) el.textContent = `${lineNum} lines`;
+  if (el) el.textContent = `${n} lines`;
 }
 
 function finalizeOutputPanel(data) {
   setScanRunning(false);
-
-  const durationEl = document.getElementById('live-duration');
-  if (durationEl && data.duration) {
-    const sec = Math.round(data.duration / 1000);
-    durationEl.textContent = sec >= 60 ? `${Math.floor(sec/60)}m ${sec%60}s` : `${sec}s`;
+  const dur = document.getElementById('live-duration');
+  if (dur && data.duration) {
+    const s = Math.round(data.duration / 1000);
+    dur.textContent = s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
   }
-
-  appendOutputLine(
-    `\n━━━ Scan complete ━━━  exit=${data.exitCode}  lines=${data.lineCount}  ${data.duration ? Math.round(data.duration/1000)+'s' : ''}`,
-    'success'
-  );
-
+  const summary = `━━━ SCAN COMPLETE ━━━  exit=${data.exitCode}  lines=${data.lineCount}  ` +
+                  (data.duration ? Math.round(data.duration/1000)+'s' : '');
+  appendOutputLine('', 'stdout');
+  appendOutputLine(summary, 'success');
   if (data.outputFiles && data.outputFiles.length > 0) {
     appendOutputLine(`📁 ${data.outputFiles.length} output file(s) written.`, 'info');
   }
 }
 
 /**
- * Append one line to the output terminal.
- * @param {string} text
- * @param {string} stream  'stdout' | 'stderr' | 'info' | 'success' | 'warning'
- * @param {boolean} silent  don't scroll (batch replay)
+ * THE KEY FUNCTION — append one line to #output-terminal.
+ *
+ * Rules:
+ *  - NEVER return early just because the line is empty (empty lines are valid separators)
+ *  - Strip ANSI before rendering
+ *  - silent=true → don't auto-scroll (used during batch replay)
+ *  - After replay batch completes, caller is responsible for one final scroll
  */
 function appendOutputLine(text, stream = 'stdout', silent = false) {
   const terminal = document.getElementById('output-terminal');
   if (!terminal) return;
 
-  // Trim old lines to avoid DOM blowup
-  while (terminal.children.length > state.maxOutputLines) {
+  // Prune old DOM nodes
+  while (terminal.children.length >= state.maxOutputLines) {
     terminal.removeChild(terminal.firstChild);
   }
 
-  // Strip common ANSI escape codes for clean display
-  const clean = stripAnsi(text);
-  if (!clean && !text.startsWith('\n')) return;
+  const clean = stripAnsi(String(text || ''));
 
   const div = document.createElement('div');
-  div.className = `terminal-line ${stream}`;
+  div.className = `terminal-line line-${stream}`;
 
-  // Highlight URLs in stdout
-  const htmlContent = stream === 'stdout'
+  const prefixMap = {
+    stderr:  '<span class="lp lp-err">ERR</span>',
+    info:    '<span class="lp lp-inf">INF</span>',
+    success: '<span class="lp lp-ok"> OK</span>',
+    warning: '<span class="lp lp-wrn">WRN</span>',
+  };
+  const prefix = prefixMap[stream] || '';
+
+  const escaped = stream === 'stdout'
     ? highlightUrls(escapeHtml(clean))
     : escapeHtml(clean);
 
-  // Prefix icon based on stream
-  const prefix = {
-    stderr:  '<span class="line-prefix stderr-prefix">ERR</span>',
-    info:    '<span class="line-prefix info-prefix">INF</span>',
-    success: '<span class="line-prefix ok-prefix"> OK</span>',
-    warning: '<span class="line-prefix warn-prefix">WRN</span>',
-    stdout:  ''
-  }[stream] || '';
-
-  div.innerHTML = `${prefix}<span class="terminal-text">${htmlContent}</span>`;
+  div.innerHTML = `${prefix}<span class="ttext">${escaped}</span>`;
   terminal.appendChild(div);
 
   if (!silent && state.outputAutoScroll) {
@@ -366,157 +317,60 @@ function toggleAutoScroll() {
   state.outputAutoScroll = !state.outputAutoScroll;
   const btn = document.getElementById('autoscroll-btn');
   if (btn) btn.classList.toggle('active', state.outputAutoScroll);
-  if (state.outputAutoScroll) {
-    const terminal = document.getElementById('output-terminal');
-    if (terminal) terminal.scrollTop = terminal.scrollHeight;
-  }
+  if (state.outputAutoScroll) scrollToBottom();
 }
 
 function scrollToBottom() {
-  const terminal = document.getElementById('output-terminal');
-  if (terminal) terminal.scrollTop = terminal.scrollHeight;
-  state.outputAutoScroll = true;
+  const t = document.getElementById('output-terminal');
+  if (t) { t.scrollTop = t.scrollHeight; state.outputAutoScroll = true; }
 }
 
-// ── Dashboard ─────────────────────────────────
-async function loadDashboard() {
-  try {
-    const [sysData, toolsData, outputsData, historyData] = await Promise.all([
-      fetch('/api/system').then(r => r.json()),
-      fetch('/api/tools').then(r => r.json()),
-      fetch('/api/outputs').then(r => r.json()),
-      fetch('/api/jobs/history').then(r => r.json())
-    ]);
-
-    const available = toolsData.tools?.filter(t => t.available).length || 0;
-    state.tools     = toolsData.tools || [];
-
-    setStatValue('stat-active-count',  sysData.activeJobs  || 0);
-    setStatValue('stat-total-count',   sysData.totalJobs   || 0);
-    setStatValue('stat-outputs-count', outputsData.length  || 0);
-    setStatValue('stat-tools-count',   `${available}/${state.tools.length}`);
-
-    state.jobHistory = historyData;
-    renderRecentJobs(historyData.slice(0, 5));
-    renderToolStatusGrid(state.tools.slice(0, 12));
-  } catch (e) {
-    console.error('Dashboard load error:', e);
-  }
+function clearOutput() {
+  const t = document.getElementById('output-terminal');
+  if (t) { t.innerHTML = ''; state.outputLineCount = 0; updateOutputStats(0); }
 }
 
-function setStatValue(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value;
+function stopCurrentScan() {
+  if (!state.currentScanJobId) return;
+  fetch(`/api/scan/stop/${state.currentScanJobId}`, { method: 'POST' })
+    .then(() => toast('Stop signal sent', 'warning'))
+    .catch(e => toast('Stop failed: ' + e.message, 'error'));
 }
 
-function renderRecentJobs(jobs) {
-  const container = document.getElementById('recent-jobs-list');
-  if (!container) return;
-  if (!jobs || jobs.length === 0) {
-    container.innerHTML = `<div class="empty-state"><i class="fas fa-inbox"></i><p>No jobs yet</p></div>`;
-    return;
-  }
-  container.innerHTML = jobs.map(job => `
-    <div class="job-item">
-      <div class="job-status-indicator ${job.status}"></div>
-      <div class="job-info">
-        <div class="job-target">${escapeHtml(job.options?.target || 'Unknown')}</div>
-        <div class="job-meta">${formatTime(job.startTime)} · ${job.type} · ${job.lineCount||0} lines</div>
-      </div>
-      <span class="job-type-badge">${job.type}</span>
-    </div>
-  `).join('');
-}
-
-function renderToolStatusGrid(tools) {
-  const container = document.getElementById('tool-status-grid');
-  if (!container) return;
-  if (!tools || tools.length === 0) {
-    container.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
-    return;
-  }
-  container.innerHTML = tools.map(tool => `
-    <div class="tool-card ${tool.available ? 'available' : 'unavailable'}">
-      <div class="tool-status-dot ${tool.available ? 'ok' : 'fail'}"></div>
-      <div>
-        <div class="tool-card-name">${tool.name}</div>
-        <div class="tool-card-ver">${tool.version}</div>
-      </div>
-    </div>
-  `).join('');
-}
-
-// ── Tools Page ────────────────────────────────
-async function loadTools() {
-  try {
-    const data = await fetch('/api/tools').then(r => r.json());
-    state.tools = data.tools || [];
-    renderToolsDetail(state.tools);
-    renderToolStatusGrid(state.tools.slice(0, 12));
-    const available = state.tools.filter(t => t.available).length;
-    setStatValue('stat-tools-count', `${available}/${state.tools.length}`);
-  } catch (e) { console.error('Tools load error:', e); }
-}
-
-function renderToolsDetail(tools) {
-  const container = document.getElementById('tools-detail-grid');
-  if (!container) return;
-  container.innerHTML = tools.map(tool => {
-    const info = TOOL_INFO[tool.name] || {};
-    return `
-      <div class="tool-detail-card">
-        <div class="tool-detail-header">
-          <div class="tool-detail-icon" style="background:${info.color||'#6366f1'}22;color:${info.color||'#6366f1'}">${info.icon||'🔧'}</div>
-          <div><div class="tool-detail-name">${tool.name}</div></div>
-          <span class="tool-detail-status ${tool.available?'ok':'fail'}">${tool.available?'● Available':'● Missing'}</span>
-        </div>
-        <div class="tool-detail-body">
-          <p class="tool-detail-desc">${info.desc||'Security/recon tool'}</p>
-          <div class="tool-detail-ver">${tool.version||'version unknown'}</div>
-          ${info.cmd?`<div class="tool-detail-ver"><strong>Example:</strong><br><code>${escapeHtml(info.cmd)}</code></div>`:''}
-          <div class="tool-detail-tags">${(info.tags||[]).map(t=>`<span class="tool-tag">${t}</span>`).join('')}</div>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-// ── Scan Form ─────────────────────────────────
+// ── Scan form ──────────────────────────────────────────────────
 function initScanForm() {
   document.querySelectorAll('.scan-type-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.scan-type-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      state.scanType = btn.dataset.type;
     });
   });
 
-  const depthInput   = document.getElementById('scan-depth');
-  const threadsInput = document.getElementById('scan-threads');
-  if (depthInput)   depthInput.addEventListener('input',   () => { document.getElementById('scan-depth-val').textContent   = depthInput.value; });
-  if (threadsInput) threadsInput.addEventListener('input', () => { document.getElementById('scan-threads-val').textContent = threadsInput.value; });
+  const depth   = document.getElementById('scan-depth');
+  const threads = document.getElementById('scan-threads');
+  if (depth)   depth.addEventListener('input',   () => { const v = document.getElementById('scan-depth-val');   if (v) v.textContent = depth.value; });
+  if (threads) threads.addEventListener('input', () => { const v = document.getElementById('scan-threads-val'); if (v) v.textContent = threads.value; });
 
-  const scanTypeSelect = document.getElementById('scan-type');
-  if (scanTypeSelect) {
-    scanTypeSelect.addEventListener('change', () => {
-      const customGroup = document.getElementById('custom-cmd-group');
-      if (customGroup) customGroup.style.display = scanTypeSelect.value === 'custom' ? 'flex' : 'none';
-    });
-  }
+  const typeSelect = document.getElementById('scan-type');
+  if (typeSelect) typeSelect.addEventListener('change', () => {
+    const cg = document.getElementById('custom-cmd-group');
+    if (cg) cg.style.display = typeSelect.value === 'custom' ? 'flex' : 'none';
+  });
 
-  const quickTarget = document.getElementById('quick-target');
-  if (quickTarget) quickTarget.addEventListener('keypress', e => { if (e.key === 'Enter') quickScan(); });
+  const qt = document.getElementById('quick-target');
+  if (qt) qt.addEventListener('keypress', e => { if (e.key === 'Enter') quickScan(); });
 
-  const scanTarget = document.getElementById('scan-target');
-  if (scanTarget) scanTarget.addEventListener('keypress', e => { if (e.key === 'Enter') startScan(); });
+  const st = document.getElementById('scan-target');
+  if (st) st.addEventListener('keypress', e => { if (e.key === 'Enter') startScan(); });
 }
 
 function quickScan() {
   const target = document.getElementById('quick-target')?.value?.trim();
-  if (!target) { toast('Please enter a target URL', 'warning'); return; }
+  if (!target) { toast('Enter a target URL', 'warning'); return; }
   navigateTo('scan');
-  const scanTargetEl = document.getElementById('scan-target');
-  if (scanTargetEl) scanTargetEl.value = target;
-  setTimeout(startScan, 300);
+  const f = document.getElementById('scan-target');
+  if (f) f.value = target;
+  setTimeout(startScan, 200);
 }
 
 async function startScan() {
@@ -527,40 +381,48 @@ async function startScan() {
   const command = document.getElementById('scan-custom-cmd')?.value?.trim();
 
   if (!target && type !== 'custom') {
-    toast('Please enter a target URL or domain', 'warning');
+    toast('Enter a target URL or domain', 'warning');
     return;
   }
 
-  // Prepare terminal immediately (optimistic)
-  const jobIdTemp = '--------';
+  // ── Prepare terminal BEFORE calling the API ─────────────────
+  // This way the terminal is ready and we subscribe immediately
   const terminal = document.getElementById('output-terminal');
   if (terminal) {
-    terminal.innerHTML = '';
+    terminal.innerHTML   = '';
     state.outputLineCount = 0;
     state.outputAutoScroll = true;
-    appendOutputLine(`► Starting ${type} scan on ${target || command}…`, 'info');
   }
+  updateOutputStats(0);
 
+  // Show panel and scroll to it
   const panel = document.getElementById('scan-output-panel');
   if (panel) {
-    panel.style.display = 'block';
+    panel.style.display = 'flex';
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const scanLabelEl = document.getElementById('live-scan-label');
-    if (scanLabelEl) scanLabelEl.textContent = `${type} → ${target || ''}`;
-    setScanRunning(true);
   }
 
-  try {
-    const response = await fetch('/api/scan/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, target, depth, threads, command })
-    });
+  // Set IDLE status while waiting for API response
+  const stat = document.getElementById('live-scan-status');
+  if (stat) { stat.textContent = '◌ STARTING…'; stat.className = 'live-status starting'; }
+  const lbl = document.getElementById('live-scan-label');
+  if (lbl) lbl.textContent = `${type} → ${target || command || ''}`;
 
-    const data = await response.json();
+  const stopBtn = document.getElementById('stop-btn');
+  if (stopBtn) stopBtn.disabled = true;
+
+  appendOutputLine(`► Launching ${type} on ${target || command}…`, 'info');
+
+  try {
+    const resp = await fetch('/api/scan/start', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ type, target, depth, threads, command })
+    });
+    const data = await resp.json();
 
     if (data.error) {
-      toast(`Error: ${data.error}`, 'error');
+      toast('Error: ' + data.error, 'error');
       setScanRunning(false);
       return;
     }
@@ -568,14 +430,17 @@ async function startScan() {
     if (data.jobId) {
       state.currentScanJobId = data.jobId;
 
-      const jobIdEl = document.getElementById('live-job-id');
-      if (jobIdEl) jobIdEl.textContent = data.jobId.substring(0, 8);
+      const jid = document.getElementById('live-job-id');
+      if (jid) jid.textContent = data.jobId.substring(0, 8);
 
-      // Subscribe immediately so we get all output
+      // Subscribe immediately — server will replay any lines already buffered
+      // and then continue streaming live
       subscribeToJob(data.jobId, 0);
 
-      toast(`Job started: ${data.jobId.substring(0,8)}`, 'success');
+      // Mark running (job-started WS event may arrive slightly later)
+      setScanRunning(true);
       updateJobBadge();
+      toast(`Job ${data.jobId.substring(0,8)} started`, 'success');
     }
   } catch (e) {
     toast('Failed to start scan: ' + e.message, 'error');
@@ -584,409 +449,405 @@ async function startScan() {
 }
 
 function resetScanForm() {
-  const fields = ['scan-target','scan-type','scan-depth','scan-threads'];
-  const vals   = ['','full-scan','3','50'];
-  fields.forEach((id, i) => {
-    const el = document.getElementById(id);
-    if (el) el.value = vals[i];
-  });
-  setStatValue('scan-depth-val',   '3');
-  setStatValue('scan-threads-val', '50');
-  const panel = document.getElementById('scan-output-panel');
-  if (panel) panel.style.display = 'none';
-  state.currentScanJobId = null;
+  const f = document.getElementById('scan-target');
+  if (f) f.value = '';
+  clearOutput();
+  setScanRunning(false);
+  const stat = document.getElementById('live-scan-status');
+  if (stat) { stat.textContent = '■ IDLE'; stat.className = 'live-status done'; }
+  const lbl = document.getElementById('live-scan-label');
+  if (lbl) lbl.textContent = '';
 }
 
-async function stopCurrentScan() {
-  if (!state.currentScanJobId) return;
+function updateJobBadge() {
+  const badge = document.getElementById('active-job-badge');
+  if (badge) badge.textContent = state.activeJobs.size;
+}
+
+// ── Dashboard ──────────────────────────────────────────────────
+async function loadDashboard() {
   try {
-    await fetch(`/api/scan/stop/${state.currentScanJobId}`, { method: 'POST' });
-    toast('Stop signal sent', 'warning');
-  } catch (e) {
-    toast('Failed to stop: ' + e.message, 'error');
+    const [sys, tools, outputs, history] = await Promise.all([
+      fetch('/api/system').then(r => r.json()),
+      fetch('/api/tools').then(r => r.json()),
+      fetch('/api/outputs').then(r => r.json()),
+      fetch('/api/jobs/history').then(r => r.json()),
+    ]);
+    state.tools      = tools.tools || [];
+    state.jobHistory = history;
+    const avail = state.tools.filter(t => t.available).length;
+    setVal('stat-active-count',  sys.activeJobs   || 0);
+    setVal('stat-total-count',   sys.totalJobs    || 0);
+    setVal('stat-outputs-count', outputs.length   || 0);
+    setVal('stat-tools-count',   `${avail}/${state.tools.length}`);
+    renderRecentJobs(history.slice(0, 5));
+    renderToolStatusGrid(state.tools.slice(0, 12));
+  } catch (e) { console.error('Dashboard error:', e); }
+}
+
+function setVal(id, v) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = v;
+}
+
+function renderRecentJobs(jobs) {
+  const c = document.getElementById('recent-jobs-list');
+  if (!c) return;
+  if (!jobs || !jobs.length) {
+    c.innerHTML = `<div class="empty-state"><i class="fas fa-inbox"></i><p>No jobs yet</p></div>`;
+    return;
   }
+  c.innerHTML = jobs.map(j => `
+    <div class="job-item" onclick="viewJobOutput('${j.id}')">
+      <div class="job-status-indicator ${j.status}"></div>
+      <div class="job-info">
+        <div class="job-target">${escapeHtml(j.options?.target || 'Unknown')}</div>
+        <div class="job-meta">${formatTime(j.startTime)} · ${j.type} · ${j.lineCount||0} lines</div>
+      </div>
+      <span class="job-type-badge">${j.type}</span>
+    </div>`).join('');
 }
 
-function clearOutput() {
-  const terminal = document.getElementById('output-terminal');
-  if (terminal) { terminal.innerHTML = ''; state.outputLineCount = 0; }
+function renderToolStatusGrid(tools) {
+  const c = document.getElementById('tool-status-grid');
+  if (!c) return;
+  if (!tools || !tools.length) {
+    c.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    return;
+  }
+  c.innerHTML = tools.map(t => `
+    <div class="tool-card ${t.available ? 'available' : 'unavailable'}">
+      <div class="tool-status-dot ${t.available ? 'ok' : 'fail'}"></div>
+      <div>
+        <div class="tool-card-name">${t.name}</div>
+        <div class="tool-card-ver">${t.version}</div>
+      </div>
+    </div>`).join('');
 }
 
-// ── Jobs Page ─────────────────────────────────
+// ── Jobs page ──────────────────────────────────────────────────
 async function loadJobs() {
   try {
-    const [activeData, historyData] = await Promise.all([
+    const [active, history] = await Promise.all([
       fetch('/api/jobs/active').then(r => r.json()),
-      fetch('/api/jobs/history').then(r => r.json())
+      fetch('/api/jobs/history').then(r => r.json()),
     ]);
-    renderActiveJobs(activeData);
-    renderJobHistory(historyData);
-    updateJobBadge(activeData.length);
-  } catch {}
-}
 
-function renderActiveJobs(jobs) {
-  const container = document.getElementById('jobs-active-list');
-  if (!container) return;
-  if (!jobs || jobs.length === 0) {
-    container.innerHTML = `<div class="empty-state"><i class="fas fa-pause-circle"></i><p>No active jobs</p></div>`;
-    return;
-  }
-  container.innerHTML = jobs.map(job => `
-    <div class="job-item active-job-row" id="job-row-${job.id}">
-      <div class="job-status-indicator running"></div>
-      <div class="job-info">
-        <div class="job-target">${escapeHtml(job.options?.target || 'Custom job')}</div>
-        <div class="job-meta">
-          Started: ${formatTime(job.startTime)} ·
-          <span id="job-linecount-${job.id}">${job.lineCount||0} lines</span>
-        </div>
-      </div>
-      <span class="job-type-badge">${job.type}</span>
-      <button class="btn-sm" onclick="viewJobOutput('${job.id}')">
-        <i class="fas fa-terminal"></i> View
-      </button>
-      <button class="btn-sm btn-danger" onclick="stopJob('${job.id}')">
-        <i class="fas fa-stop"></i> Stop
-      </button>
-    </div>
-  `).join('');
-}
+    // Tab handling
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const isActive = tab.dataset.tab === 'active';
+        document.getElementById('jobs-active-list').style.display  = isActive ? '' : 'none';
+        document.getElementById('jobs-history-list').style.display = isActive ? 'none' : '';
+      });
+    });
 
-function renderJobHistory(jobs) {
-  const container = document.getElementById('jobs-history-list');
-  if (!container) return;
-  if (!jobs || jobs.length === 0) {
-    container.innerHTML = `<div class="empty-state"><i class="fas fa-history"></i><p>No job history</p></div>`;
-    return;
-  }
-  container.innerHTML = jobs.map(job => `
-    <div class="job-item">
-      <div class="job-status-indicator ${job.status}"></div>
-      <div class="job-info">
-        <div class="job-target">${escapeHtml(job.options?.target || 'Custom job')}</div>
-        <div class="job-meta">${formatTime(job.startTime)} · exit ${job.exitCode ?? '-'} · ${job.lineCount||0} lines</div>
-      </div>
-      <span class="job-type-badge">${job.type}</span>
-      <button class="btn-sm" onclick="viewJobOutput('${job.id}')">
-        <i class="fas fa-terminal"></i> Logs
-      </button>
-    </div>
-  `).join('');
-}
-
-// View a job's output in the scan panel
-async function viewJobOutput(jobId) {
-  navigateTo('scan');
-  state.currentScanJobId = jobId;
-
-  const terminal = document.getElementById('output-terminal');
-  if (terminal) {
-    terminal.innerHTML = '';
-    state.outputLineCount = 0;
-    state.outputAutoScroll = true;
-    appendOutputLine(`► Loading output for job ${jobId.substring(0,8)}…`, 'info');
-  }
-
-  const panel = document.getElementById('scan-output-panel');
-  if (panel) {
-    panel.style.display = 'block';
-    const jobIdEl = document.getElementById('live-job-id');
-    if (jobIdEl) jobIdEl.textContent = jobId.substring(0, 8);
-  }
-
-  // Fetch buffered output via REST
-  try {
-    const data = await fetch(`/api/jobs/${jobId}/output`).then(r => r.json());
-    if (terminal) terminal.innerHTML = '';
-
-    const isRunning = data.status === 'running';
-    setScanRunning(isRunning);
-
-    data.lines.forEach(entry => appendOutputLine(entry.text, entry.stream, true));
-    updateOutputStats(data.lineCount);
-
-    if (isRunning) {
-      // Subscribe to live updates from where we left off
-      subscribeToJob(jobId, data.lines.length);
-      appendOutputLine('── live output below ──', 'info');
-    } else {
-      appendOutputLine(`── job ${data.status} ──`, 'success');
+    const ac = document.getElementById('jobs-active-list');
+    if (ac) {
+      if (!active.length) {
+        ac.innerHTML = '<div class="empty-state"><i class="fas fa-pause-circle"></i><p>No active jobs</p></div>';
+      } else {
+        ac.innerHTML = active.map(j => `
+          <div class="job-item">
+            <div class="job-status-indicator running"></div>
+            <div class="job-info">
+              <div class="job-target">${escapeHtml(j.options?.target || j.options?.command || 'Unknown')}</div>
+              <div class="job-meta">${j.type} · pid ${j.pid} · <span id="job-linecount-${j.id}">${j.lineCount} lines</span></div>
+            </div>
+            <button class="btn-sm btn-danger" onclick="stopJob('${j.id}')"><i class="fas fa-stop"></i> Stop</button>
+          </div>`).join('');
+      }
     }
 
-    // Scroll to bottom after replay
-    if (terminal) terminal.scrollTop = terminal.scrollHeight;
-  } catch (e) {
-    appendOutputLine(`Error loading output: ${e.message}`, 'stderr');
-  }
+    const hc = document.getElementById('jobs-history-list');
+    if (hc) {
+      hc.innerHTML = history.map(j => `
+        <div class="job-item" onclick="viewJobOutput('${j.id}')" style="cursor:pointer">
+          <div class="job-status-indicator ${j.status}"></div>
+          <div class="job-info">
+            <div class="job-target">${escapeHtml(j.options?.target || j.options?.command || 'Unknown')}</div>
+            <div class="job-meta">${formatTime(j.startTime)} · ${j.type} · ${j.lineCount||0} lines · exit ${j.exitCode ?? '?'}</div>
+          </div>
+          <span class="job-type-badge ${j.status}">${j.status}</span>
+        </div>`).join('');
+    }
+  } catch (e) { console.error('Jobs error:', e); }
 }
 
 async function stopJob(jobId) {
   try {
     await fetch(`/api/scan/stop/${jobId}`, { method: 'POST' });
-    toast('Job stopped', 'warning');
-    loadJobs();
-  } catch { toast('Failed to stop job', 'error'); }
+    toast('Stop signal sent', 'warning');
+    setTimeout(loadJobs, 500);
+  } catch (e) { toast('Stop failed: ' + e.message, 'error'); }
 }
 
-function updateJobBadge(count) {
-  const badge = document.getElementById('active-job-badge');
-  const n = count !== undefined ? count : state.activeJobs.size;
-  if (badge) {
-    badge.textContent = n;
-    badge.classList.toggle('visible', n > 0);
+async function viewJobOutput(jobId) {
+  navigateTo('scan');
+  state.currentScanJobId = jobId;
+
+  const terminal = document.getElementById('output-terminal');
+  if (terminal) { terminal.innerHTML = ''; state.outputLineCount = 0; }
+
+  const panel = document.getElementById('scan-output-panel');
+  if (panel) {
+    panel.style.display = 'flex';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-}
 
-// ── Tab switching ─────────────────────────────
-document.addEventListener('click', e => {
-  if (!e.target.classList.contains('tab')) return;
-  const container = e.target.closest('.panel');
-  if (!container) return;
+  appendOutputLine(`► Loading job output: ${jobId.substring(0,8)}…`, 'info');
+  subscribeToJob(jobId, 0);
 
-  container.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  e.target.classList.add('active');
-
-  const tab = e.target.dataset.tab;
-  const active  = document.getElementById('jobs-active-list');
-  const history = document.getElementById('jobs-history-list');
-  if (active)  active.style.display  = tab === 'active'  ? 'flex' : 'none';
-  if (history) history.style.display = tab === 'history' ? 'flex' : 'none';
-});
-
-// ── Results / Outputs ─────────────────────────
-async function loadOutputs() {
+  // Also do HTTP replay in case WS is slow
   try {
-    const outputs = await fetch('/api/outputs').then(r => r.json());
-    state.outputs = outputs;
-    renderFileTree(outputs);
+    const data = await fetch(`/api/jobs/${jobId}/output`).then(r => r.json());
+    if (terminal) terminal.innerHTML = '';
+    state.outputLineCount = 0;
+    data.lines.forEach(entry => appendOutputLine(entry.text, entry.stream, true));
+    state.outputLineCount = data.lineCount || data.lines.length;
+    updateOutputStats(state.outputLineCount);
+    scrollToBottom();
+    if (data.status === 'running') setScanRunning(true);
+    else setScanRunning(false);
   } catch {}
 }
 
-function renderFileTree(outputs) {
-  const tree = document.getElementById('output-tree');
-  if (!tree) return;
-  if (!outputs || outputs.length === 0) {
-    tree.innerHTML = `<div class="empty-state"><i class="fas fa-folder-open"></i><p>No output files yet</p></div>`;
-    return;
-  }
-  tree.innerHTML = outputs.map(dir => `
-    <div class="file-tree-dir" id="dir-${dir.name}">
-      <div class="file-tree-dir-name" onclick="toggleDir('${escapeHtml(dir.name)}')">
-        <i class="fas fa-folder"></i>
-        <span title="${escapeHtml(dir.name)}">${dir.name.length > 30 ? dir.name.substring(0,30)+'…' : escapeHtml(dir.name)}</span>
-        <span class="file-size">${dir.fileCount} files · ${formatSize(dir.totalSize)}</span>
-      </div>
-      <div class="file-tree-files" id="files-${dir.name}">
-        <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i></div>
-      </div>
-    </div>
-  `).join('');
+// ── Tools page ─────────────────────────────────────────────────
+async function loadTools() {
+  try {
+    const data = await fetch('/api/tools').then(r => r.json());
+    state.tools = data.tools || [];
+    renderToolsDetail(state.tools);
+    renderToolStatusGrid(state.tools.slice(0, 12));
+    setVal('stat-tools-count', `${state.tools.filter(t=>t.available).length}/${state.tools.length}`);
+  } catch (e) { console.error('Tools error:', e); }
 }
 
-async function toggleDir(dirName) {
-  const dirEl   = document.getElementById(`dir-${dirName}`);
-  const filesEl = document.getElementById(`files-${dirName}`);
-  if (!dirEl) return;
-
-  if (dirEl.classList.contains('open')) { dirEl.classList.remove('open'); return; }
-  dirEl.classList.add('open');
-
-  if (filesEl && filesEl.querySelector('.loading-spinner')) {
-    try {
-      const files = await fetch(`/api/outputs/${encodeURIComponent(dirName)}/files`).then(r => r.json());
-      filesEl.innerHTML = files.map(file => `
-        <div class="file-tree-file" onclick="viewFile('${escapeHtml(file.path)}', '${escapeHtml(file.name)}')">
-          <i class="${getFileIcon(file.name)}"></i>
-          <span>${escapeHtml(file.name)}</span>
-          <span class="file-size">${formatSize(file.size)}</span>
+function renderToolsDetail(tools) {
+  const c = document.getElementById('tools-detail-grid');
+  if (!c) return;
+  c.innerHTML = tools.map(t => {
+    const info = TOOL_INFO[t.name] || {};
+    return `
+      <div class="tool-detail-card">
+        <div class="tool-detail-header">
+          <div class="tool-detail-icon" style="background:${info.color||'#6366f1'}22;color:${info.color||'#6366f1'}">${info.icon||'🔧'}</div>
+          <div><div class="tool-detail-name">${t.name}</div></div>
+          <span class="tool-detail-status ${t.available?'ok':'fail'}">${t.available?'● Available':'● Missing'}</span>
         </div>
-      `).join('') || '<div class="file-tree-file"><span>No files</span></div>';
-    } catch {
-      filesEl.innerHTML = '<div class="file-tree-file"><span>Error loading files</span></div>';
-    }
+        <div class="tool-detail-body">
+          <p class="tool-detail-desc">${info.desc||'Security/recon tool'}</p>
+          <div class="tool-detail-ver">${t.version||'version unknown'}</div>
+          ${info.cmd?`<div class="tool-detail-cmd"><code>${escapeHtml(info.cmd)}</code></div>`:''}
+          <div class="tool-detail-tags">${(info.tags||[]).map(tg=>`<span class="tool-tag">${tg}</span>`).join('')}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Results page ────────────────────────────────────────────────
+async function loadOutputs() {
+  try {
+    const dirs = await fetch('/api/outputs').then(r => r.json());
+    state.outputs = dirs;
+    renderOutputTree(dirs);
+  } catch (e) { console.error('Outputs error:', e); }
+}
+
+function renderOutputTree(dirs) {
+  const c = document.getElementById('output-tree');
+  if (!c) return;
+  if (!dirs || !dirs.length) {
+    c.innerHTML = '<div class="empty-state"><i class="fas fa-folder-open"></i><p>No output files yet</p></div>';
+    return;
   }
+  c.innerHTML = dirs.map(d => `
+    <div class="tree-dir" onclick="loadDirFiles('${escapeHtml(d.name)}', this)">
+      <div class="tree-dir-header">
+        <i class="fas fa-folder"></i>
+        <span class="tree-dir-name">${escapeHtml(d.name)}</span>
+        <span class="tree-dir-meta">${d.fileCount} files · ${formatBytes(d.totalSize)}</span>
+      </div>
+      <div class="tree-dir-files" id="files-${escapeHtml(d.name)}" style="display:none"></div>
+    </div>`).join('');
+}
+
+async function loadDirFiles(dirName, el) {
+  const container = document.getElementById(`files-${dirName}`);
+  if (!container) return;
+  const wasOpen = container.style.display !== 'none';
+  container.style.display = wasOpen ? 'none' : 'block';
+  if (wasOpen || container.children.length > 0) return;
+  try {
+    const files = await fetch(`/api/outputs/${encodeURIComponent(dirName)}/files`).then(r => r.json());
+    container.innerHTML = files.map(f => `
+      <div class="tree-file" onclick="viewFile('${escapeHtml(f.path)}', '${escapeHtml(f.name)}')">
+        <i class="fas fa-file-alt"></i>
+        <span>${escapeHtml(f.name)}</span>
+        <span class="tree-file-size">${formatBytes(f.size)}</span>
+      </div>`).join('') || '<div class="empty-state" style="font-size:12px">Empty</div>';
+  } catch {}
 }
 
 async function viewFile(filePath, fileName) {
   state.selectedFile = filePath;
-  document.querySelectorAll('.file-tree-file').forEach(f => f.classList.remove('active'));
-  event?.target?.closest?.('.file-tree-file')?.classList.add('active');
-
   const viewer = document.getElementById('file-viewer');
+  const actions = document.getElementById('file-viewer-actions');
+  const dlBtn   = document.getElementById('download-file-btn');
   if (!viewer) return;
-  viewer.innerHTML = `<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
-
+  viewer.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading…</div>';
+  if (actions) actions.style.display = 'flex';
+  if (dlBtn) dlBtn.onclick = () => window.open(`/api/download?path=${encodeURIComponent(filePath)}`);
   try {
     const data = await fetch(`/api/file?path=${encodeURIComponent(filePath)}&lines=1000`).then(r => r.json());
-    const lineCount = data.content.split('\n').length;
     viewer.innerHTML = `
-      <div class="file-viewer-header">${escapeHtml(fileName)} · ${lineCount} lines${data.truncated?' (truncated)':''}</div>
-      <pre>${escapeHtml(data.content)}</pre>`;
-
-    const actions = document.getElementById('file-viewer-actions');
-    const dlBtn   = document.getElementById('download-file-btn');
-    if (actions && dlBtn) {
-      actions.style.display = 'flex';
-      dlBtn.onclick = () => window.open(`/api/download?path=${encodeURIComponent(filePath)}`);
-    }
-
-    const header = document.querySelector('#page-results .panel-header h3');
-    if (header) header.textContent = `File: ${fileName}`;
-  } catch {
-    viewer.innerHTML = `<div class="file-viewer-placeholder"><i class="fas fa-exclamation-triangle"></i><p>Error loading file</p></div>`;
-  }
+      <div class="file-viewer-info">${escapeHtml(fileName)} · ${data.totalLines} lines${data.truncated?' (truncated)':''}</div>
+      <pre class="file-content">${escapeHtml(data.content)}</pre>`;
+  } catch (e) { viewer.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`; }
 }
 
-// ── Terminal Page ─────────────────────────────
+// ── Terminal page ───────────────────────────────────────────────
 function initTerminal() {
   const input = document.getElementById('terminal-input');
-  if (!input) return;
-
-  let histIdx = -1;
-  input.addEventListener('keypress', e => { if (e.key === 'Enter') execTerminalCmd(); });
-  input.addEventListener('keydown',  e => {
-    if (e.key === 'ArrowUp') {
-      histIdx = Math.min(histIdx + 1, state.terminalHistory.length - 1);
-      input.value = state.terminalHistory[histIdx] || '';
-    } else if (e.key === 'ArrowDown') {
-      histIdx = Math.max(histIdx - 1, -1);
-      input.value = histIdx >= 0 ? state.terminalHistory[histIdx] : '';
-    }
-  });
+  if (input) {
+    input.addEventListener('keypress', e => { if (e.key === 'Enter') execTerminalCmd(); });
+    input.addEventListener('keydown',  e => {
+      if (e.key === 'ArrowUp') {
+        if (state.terminalHistory.length) {
+          state._histIdx = Math.max(0, (state._histIdx ?? state.terminalHistory.length) - 1);
+          input.value = state.terminalHistory[state._histIdx] || '';
+        }
+      }
+    });
+  }
 }
 
 async function execTerminalCmd() {
   const input = document.getElementById('terminal-input');
-  const cmd = input?.value?.trim();
+  const cmd   = input?.value?.trim();
   if (!cmd) return;
+  if (input) input.value = '';
 
-  state.terminalHistory.unshift(cmd);
-  input.value = '';
+  state.terminalHistory.push(cmd);
+  state._histIdx = state.terminalHistory.length;
 
-  appendToTerminalHistory(`$ ${cmd}`, 'prompt');
-
-  try {
-    const data = await fetch('/api/exec', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: cmd, timeout: 30000 })
-    }).then(r => r.json());
-
-    if (data.stdout) data.stdout.split('\n').forEach(line => { if (line.trim()) appendToTerminalHistory(line, 'stdout'); });
-    if (data.stderr) data.stderr.split('\n').forEach(line => { if (line.trim()) appendToTerminalHistory(line, 'stderr'); });
-    appendToTerminalHistory(`[exit: ${data.exitCode}]`, data.exitCode === 0 ? 'success' : 'warning');
-  } catch (e) {
-    appendToTerminalHistory(`Error: ${e.message}`, 'stderr');
+  const hist = document.getElementById('terminal-history');
+  if (hist) {
+    const cmdLine = document.createElement('div');
+    cmdLine.className = 'terminal-line terminal-cmd';
+    cmdLine.innerHTML = `<span class="terminal-prompt">$</span> <span class="ttext">${escapeHtml(cmd)}</span>`;
+    hist.appendChild(cmdLine);
+    hist.scrollTop = hist.scrollHeight;
   }
+
+  // Use SSE for streaming terminal output
+  const evtSrc = new EventSource(`/api/exec/stream?cmd=${encodeURIComponent(cmd)}`);
+  evtSrc.onmessage = ev => {
+    try {
+      const d = JSON.parse(ev.data);
+      if (!hist) return;
+      if (d.type === 'exit') {
+        const exitLine = document.createElement('div');
+        exitLine.className = 'terminal-line info';
+        exitLine.innerHTML = `<span class="ttext" style="color:var(--text-muted)">exit ${d.text}</span>`;
+        hist.appendChild(exitLine);
+        hist.scrollTop = hist.scrollHeight;
+        evtSrc.close();
+        return;
+      }
+      if (d.text === '') return;
+      const line = document.createElement('div');
+      line.className = `terminal-line ${d.type}`;
+      line.innerHTML = `<span class="ttext">${highlightUrls(escapeHtml(stripAnsi(d.text)))}</span>`;
+      hist.appendChild(line);
+      hist.scrollTop = hist.scrollHeight;
+    } catch {}
+  };
+  evtSrc.onerror = () => evtSrc.close();
 }
 
-function appendToTerminalHistory(text, type) {
-  const history = document.getElementById('terminal-history');
-  if (!history) return;
-
-  const line = document.createElement('div');
-  line.className = 'terminal-line';
-  const cls = { prompt:'info', stdout:'stdout', stderr:'stderr', success:'success', warning:'warning' }[type] || 'stdout';
-  line.innerHTML = `<span class="terminal-text ${cls}">${escapeHtml(text)}</span>`;
-  history.appendChild(line);
-  history.scrollTop = history.scrollHeight;
-}
-
-// ── Docs Page ─────────────────────────────────
+// ── Docs page ───────────────────────────────────────────────────
 function loadDocs() {
-  const container = document.getElementById('docs-content');
-  if (!container || container.dataset.loaded) return;
-  container.dataset.loaded = '1';
-
-  container.innerHTML = `
-    <div class="docs-grid">
-      <div class="docs-card"><h3><i class="fas fa-spider"></i> katana - Next-Gen Crawler</h3>
-        <pre>katana -u https://target.com -d 3 -c 50 -jc -fx -xhr -aff -rl 150 -o output.txt</pre>
-        <ul><li><code>-d</code> Crawl depth</li><li><code>-jc</code> JS crawling</li><li><code>-fx</code> Extract from responses</li><li><code>-xhr</code> Capture XHR requests</li></ul></div>
-      <div class="docs-card"><h3><i class="fas fa-globe"></i> gau - Get All URLs</h3>
-        <pre>echo "target.com" | gau --threads 30 --providers wayback,commoncrawl,otx,urlscan --blacklist png,jpg,gif,css</pre>
-        <ul><li><code>--providers</code> Choose sources</li><li><code>--blacklist</code> Skip extensions</li><li><code>--subs</code> Include subdomains</li></ul></div>
-      <div class="docs-card"><h3><i class="fas fa-satellite"></i> waymore</h3>
-        <pre>waymore -i target.com -mode U -oU urls.txt -p 50</pre>
-        <ul><li><code>-mode U</code> URL mode</li><li><code>-mode R</code> Response mode</li></ul></div>
-      <div class="docs-card"><h3><i class="fas fa-spider"></i> gospider</h3>
-        <pre>gospider -s https://target.com -o output/ -c 50 -d 3 --js --sitemap --robots</pre></div>
-      <div class="docs-card"><h3><i class="fas fa-search"></i> httpx - HTTP Probe</h3>
-        <pre>httpx -l urls.txt -o alive.txt -title -sc -ct -server -tech-detect -threads 50</pre></div>
-      <div class="docs-card"><h3><i class="fas fa-magic"></i> Full Pipeline</h3>
-        <pre>TARGET="https://example.com"; DOMAIN="example.com"
-katana -u $TARGET -d 3 -jc | anew urls.txt
-echo $DOMAIN | gau | anew urls.txt
-cat urls.txt | uro | sort -u > dedup.txt
-httpx -l dedup.txt -o alive.txt -sc -title
-gf xss dedup.txt > xss.txt
-gf sqli dedup.txt > sqli.txt</pre></div>
-      <div class="docs-card"><h3><i class="fab fa-docker"></i> Docker Usage</h3>
-        <pre>docker compose up -d          # Start dashboard on port 8888
-docker exec -it crawler-toolkit bash   # Shell
-docker logs -f crawler-toolkit         # Logs</pre></div>
+  const c = document.getElementById('docs-content');
+  if (!c) return;
+  c.innerHTML = `
+    <div class="docs-card">
+      <h2><i class="fas fa-book"></i> Documentation</h2>
+      <p>Web Crawler Toolkit 2026 — 17 security tools orchestrated via a Node.js dashboard with real-time WebSocket streaming.</p>
+      <h3>Quick Start</h3>
+      <ol>
+        <li>Go to <strong>New Scan</strong> and enter your target URL (e.g. <code>https://example.com</code>)</li>
+        <li>Select scan type: Full Scan, Crawl Only, URL Collection, or JS Analyze</li>
+        <li>Adjust depth and thread settings</li>
+        <li>Click <strong>Launch Scan</strong> — output streams live below</li>
+        <li>Results saved to <code>/workspace/output/</code> — browse in <strong>Results</strong> tab</li>
+      </ol>
+      <h3>Scan Types</h3>
+      <table class="docs-table">
+        <tr><th>Type</th><th>Tools Used</th><th>Best For</th></tr>
+        <tr><td>Full Scan</td><td>katana, gau, gospider, waymore, xnLinkFinder, httpx, gf</td><td>Complete recon</td></tr>
+        <tr><td>Crawl Only</td><td>katana, gospider, xnLinkFinder, httpx</td><td>Fast URL discovery</td></tr>
+        <tr><td>URL Collection</td><td>gau, waybackurls, waymore</td><td>Passive/archive URLs</td></tr>
+        <tr><td>JS Analyze</td><td>katana, gau, curl + regex</td><td>JS endpoint extraction</td></tr>
+        <tr><td>Custom</td><td>any command</td><td>Direct tool access</td></tr>
+      </table>
+      <h3>Tool Directory</h3>
+      <p>All tools installed in <code>/usr/local/bin/</code> and <code>/opt/venv/bin/</code>. Access them directly in the <strong>Terminal</strong> tab.</p>
     </div>`;
 }
 
-// ── Utility Functions ─────────────────────────
-function stripAnsi(str) {
-  // Remove ANSI escape codes (colors, cursor movement, etc.)
-  return String(str || '').replace(/\x1B\[[0-9;]*[mGKHFABCDsuJr]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+// ── Utility helpers ─────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function stripAnsi(s) {
+  return String(s || '')
+    .replace(/\x1B\[[0-9;]*[mGKHFABCDsuJrTMPlh]/g, '')
+    .replace(/\x1B\][^\x07]*\x07/g, '')
+    .replace(/\x1B[()][0-9A-Z]/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // strip other ctrl chars
 }
 
 function highlightUrls(html) {
   return html.replace(/(https?:\/\/[^\s&"<>]+)/g,
-    '<a href="$1" target="_blank" rel="noopener" class="output-url">$1</a>');
+    '<a href="$1" target="_blank" rel="noopener" class="url-link">$1</a>');
 }
 
 function formatTime(iso) {
-  if (!iso) return 'N/A';
-  return new Date(iso).toLocaleTimeString();
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
 }
 
-function formatSize(bytes) {
-  if (!bytes || bytes === 0) return '0B';
-  const k = 1024, sizes = ['B','KB','MB','GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
-}
-
-function escapeHtml(text) {
-  const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
-  return String(text || '').replace(/[&<>"']/g, m => map[m]);
-}
-
-function getFileIcon(name) {
-  if (name.endsWith('.txt'))               return 'fas fa-file-alt';
-  if (name.endsWith('.json') || name.endsWith('.jsonl')) return 'fas fa-file-code';
-  if (name.endsWith('.log'))               return 'fas fa-file-medical';
-  if (name.endsWith('.csv'))               return 'fas fa-file-csv';
-  if (name.endsWith('.html'))              return 'fab fa-html5';
-  if (name.endsWith('.js'))                return 'fab fa-js';
-  return 'fas fa-file';
-}
-
-function toast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-  const el   = document.createElement('div');
-  const icons = { success:'✓', error:'✕', info:'ℹ', warning:'⚠' };
-  el.className = `toast ${type}`;
-  el.innerHTML = `<span>${icons[type]||'ℹ'}</span>${escapeHtml(message)}`;
-  container.appendChild(el);
-  setTimeout(() => {
-    el.style.opacity   = '0';
-    el.style.transform = 'translateX(100%)';
-    el.style.transition = 'all 0.3s';
-    setTimeout(() => el.remove(), 300);
-  }, 4000);
+function formatBytes(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/1048576).toFixed(1)} MB`;
 }
 
 function refreshPage() {
-  loadDashboard();
-  if (state.currentPage === 'tools')   loadTools();
-  if (state.currentPage === 'results') loadOutputs();
-  if (state.currentPage === 'jobs')    loadJobs();
-  toast('Refreshed', 'info');
+  if (state.currentPage === 'dashboard') loadDashboard();
+  else if (state.currentPage === 'tools')   loadTools();
+  else if (state.currentPage === 'results') loadOutputs();
+  else if (state.currentPage === 'jobs')    loadJobs();
+}
+
+// ── Toast ───────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  if (!c) return;
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  const icons = { info: 'fa-info-circle', success: 'fa-check-circle', warning: 'fa-exclamation-triangle', error: 'fa-times-circle' };
+  t.innerHTML = `<i class="fas ${icons[type]||'fa-info-circle'}"></i> ${escapeHtml(msg)}`;
+  c.appendChild(t);
+  setTimeout(() => t.classList.add('show'), 10);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 4000);
 }
