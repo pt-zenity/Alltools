@@ -250,14 +250,16 @@ RUN mkdir -p /root/.gf && \
     printf '{"flags":"-iE","patterns":["upload","file","attachment","multipart","enctype","fileupload","img","image","photo","avatar","media"]}' > /root/.gf/upload.json && \
     echo "gf patterns setup done"
 
-# ── SSH server for remote access ─────────────────────────────
-RUN apk add --no-cache openssh-server socat && \
+# ── SSH server for remote access (incl. SCP/SFTP subsystem) ──
+RUN apk add --no-cache openssh-server openssh-sftp-server socat && \
     ssh-keygen -A && \
     # Set root password for SSH access
     echo 'root:CrawlerKit2026!' | chpasswd && \
-    # Configure sshd: allow root login with password
-    printf 'Port 22\nPermitRootLogin yes\nPasswordAuthentication yes\nChallengeResponseAuthentication no\n' > /etc/ssh/sshd_config && \
-    echo "SSH setup done"
+    # Configure sshd: allow root login + SCP/SFTP subsystem
+    printf 'Port 22\nPermitRootLogin yes\nPasswordAuthentication yes\n\
+ChallengeResponseAuthentication no\nSubsystem sftp /usr/lib/ssh/sftp-server\n' \
+        > /etc/ssh/sshd_config && \
+    echo "SSH + SFTP subsystem setup done"
 
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
