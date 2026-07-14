@@ -7,8 +7,8 @@
 FROM alpine:3.19 AS base
 
 LABEL maintainer="crawler-toolkit-2026"
-LABEL description="Ultimate Web Crawler Toolkit 2026 - katana + gau + waymore + gospider + xnLinkFinder + httpx + nodejs"
-LABEL version="2026.1.0"
+LABEL description="Ultimate Web Crawler Toolkit 2026 - katana + gau + waymore + gospider + xnLinkFinder + httpx + SecretFinder + JSScanner + Cariddi + mantra + Gitleaks + nodejs"
+LABEL version="2026.6.0"
 
 # ── System dependencies ──────────────────────────────────────
 RUN apk update && apk upgrade && \
@@ -110,6 +110,21 @@ RUN echo "==> Installing additional PD tools..." && \
     go install github.com/tomnomnom/fff@latest && \
     echo "fff: OK"
 
+# ── NEW tools: Cariddi + mantra ───────────────────────────────
+RUN echo "==> Installing Cariddi and mantra..." && \
+    # Cariddi — in-depth crawler: finds endpoints, secrets, extensions
+    go install github.com/edoardottt/cariddi/cmd/cariddi@latest && \
+    echo "cariddi: OK" && \
+    # mantra — search for secrets buried in JS/HTML via regex patterns
+    go install github.com/MrEmpy/mantra@latest && \
+    echo "mantra: OK"
+
+# ── Gitleaks — secret scanner for git repos & raw text ───────
+RUN echo "==> Installing gitleaks..." && \
+    # Use pinned v8.x tag that builds on Go 1.21
+    go install github.com/gitleaks/gitleaks/v8@v8.18.4 && \
+    echo "gitleaks: OK"
+
 # ── Stage: Python tools ───────────────────────────────────────
 FROM base AS python-builder
 
@@ -158,6 +173,19 @@ RUN echo "[Python] Installing additional tools..." && \
 
 # ── uro (URL deduplication) ──
 RUN pip install uro 2>/dev/null && echo "uro: OK" || echo "uro already installed"
+
+# ── SecretFinder — secret/key/token scanner in JS files ──────
+RUN echo "[Python] Installing SecretFinder..." && \
+    git clone --depth=1 https://github.com/m4ll0k/SecretFinder.git /opt/SecretFinder && \
+    pip install -r /opt/SecretFinder/requirements.txt 2>/dev/null || true && \
+    chmod +x /opt/SecretFinder/SecretFinder.py && \
+    echo "SecretFinder: OK"
+
+# ── JSScanner — JS endpoint + secret scanner ─────────────────
+RUN echo "[Python] Installing JSScanner..." && \
+    git clone --depth=1 https://github.com/dark-warlord14/JSScanner.git /opt/JSScanner && \
+    pip install -r /opt/JSScanner/requirements.txt 2>/dev/null || true && \
+    echo "JSScanner: OK"
 
 # ── Stage: Node.js tools ──────────────────────────────────────
 FROM base AS node-builder
@@ -216,6 +244,8 @@ RUN mkdir -p \
     /workspace/output/waymore \
     /workspace/output/xnlink \
     /workspace/output/httpx \
+    /workspace/output/cariddi \
+    /workspace/output/secrets \
     /workspace/output/subdomains \
     /workspace/output/combined \
     /workspace/scripts \

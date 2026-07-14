@@ -34,13 +34,14 @@ if [ -z "$TARGET" ]; then
     exit 1
 fi
 
-mkdir -p "$OUTPUT_DIR"/{katana,gospider,combined}
+mkdir -p "$OUTPUT_DIR"/{katana,gospider,cariddi,combined}
 
 # Pre-create output files so wc -l never fails
 touch "$OUTPUT_DIR/katana/urls.txt"
 touch "$OUTPUT_DIR/katana/results.jsonl"
 touch "$OUTPUT_DIR/gospider/combined.txt"
 touch "$OUTPUT_DIR/xnlink.txt"
+touch "$OUTPUT_DIR/cariddi/results.txt"
 touch "$OUTPUT_DIR/combined/all-urls.txt"
 touch "$OUTPUT_DIR/combined/alive-urls.txt"
 
@@ -87,7 +88,7 @@ run_tool() {
 clear 2>/dev/null || true
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║${NC}  ${BOLD}${WHITE}🕷️  WEB CRAWLER TOOLKIT 2026 — CRAWL ONLY${NC}              ${BOLD}${CYAN}║${NC}"
+echo -e "${BOLD}${CYAN}║${NC}  ${BOLD}${WHITE}🕷️  WEB CRAWLER TOOLKIT 2026 — CRAWL ONLY${NC}             ${BOLD}${CYAN}║${NC}"
 echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
 printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Target  :" "$TARGET"
 printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Domain  :" "$DOMAIN"
@@ -101,7 +102,7 @@ echo ""
 STEP_START=$(date +%s)
 if command -v katana &>/dev/null; then
     echo -e ""
-    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/4${WHITE}]${NC} ${BOLD}katana${NC} ${DIM}— active crawling with JS execution${NC}"
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/5${WHITE}]${NC} ${BOLD}katana${NC} ${DIM}— active crawling with JS execution${NC}"
     run_tool "katana" "$OUTPUT_DIR/katana/tool.log" \
         katana \
             -u "$TARGET" \
@@ -117,7 +118,7 @@ if command -v katana &>/dev/null; then
     KATANA_C=$(wc -l < "$OUTPUT_DIR/katana/urls.txt" 2>/dev/null || echo 0)
     ok "katana" "$KATANA_C" "$(elapsed_since $STEP_START)"
 else
-    skip "katana [1/4]"
+    skip "katana [1/5]"
     KATANA_C=0
 fi
 
@@ -125,7 +126,7 @@ fi
 STEP_START=$(date +%s)
 if command -v gospider &>/dev/null; then
     echo -e ""
-    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}gospider${NC} ${DIM}— spider with sitemap + robots + JS${NC}"
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/5${WHITE}]${NC} ${BOLD}gospider${NC} ${DIM}— spider with sitemap + robots + JS${NC}"
     run_tool "gospider" "$OUTPUT_DIR/gospider/tool.log" \
         gospider \
             -s "$TARGET" \
@@ -144,7 +145,7 @@ if command -v gospider &>/dev/null; then
     GOSPIDER_C=$(wc -l < "$OUTPUT_DIR/gospider/combined.txt" 2>/dev/null || echo 0)
     ok "gospider" "$GOSPIDER_C" "$(elapsed_since $STEP_START)"
 else
-    skip "gospider [2/4]"
+    skip "gospider [2/5]"
     GOSPIDER_C=0
 fi
 
@@ -152,7 +153,7 @@ fi
 STEP_START=$(date +%s)
 if command -v xnLinkFinder &>/dev/null; then
     echo -e ""
-    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/4${WHITE}]${NC} ${BOLD}xnLinkFinder${NC} ${DIM}— link extraction from pages${NC}"
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/5${WHITE}]${NC} ${BOLD}xnLinkFinder${NC} ${DIM}— link extraction from pages${NC}"
     run_tool "xnLinkFinder" "$OUTPUT_DIR/xnlink_tool.log" \
         xnLinkFinder \
             -i "$TARGET" \
@@ -163,18 +164,36 @@ if command -v xnLinkFinder &>/dev/null; then
     XNLINK_C=$(wc -l < "$OUTPUT_DIR/xnlink.txt" 2>/dev/null || echo 0)
     ok "xnLinkFinder" "$XNLINK_C" "$(elapsed_since $STEP_START)"
 else
-    skip "xnLinkFinder [3/4]"
+    skip "xnLinkFinder [3/5]"
     XNLINK_C=0
+fi
+
+# ── cariddi - in-depth crawl ──────────────────────────────────
+STEP_START=$(date +%s)
+if command -v cariddi &>/dev/null; then
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}4/5${WHITE}]${NC} ${BOLD}cariddi${NC} ${DIM}— in-depth crawl: endpoints, extensions, secrets${NC}"
+    run_tool "cariddi" "$OUTPUT_DIR/cariddi/tool.log" \
+        bash -c "echo '$TARGET' | cariddi \
+            -s -ext 1 -e -eps \
+            -d '$DEPTH' -t '$THREADS' \
+            2>/dev/null | tee '$OUTPUT_DIR/cariddi/results.txt'"
+    CARIDDI_C=$(wc -l < "$OUTPUT_DIR/cariddi/results.txt" 2>/dev/null || echo 0)
+    ok "cariddi" "$CARIDDI_C" "$(elapsed_since $STEP_START)"
+else
+    skip "cariddi [4/5]"
+    CARIDDI_C=0
 fi
 
 # ── Combine results ───────────────────────────────────────────
 echo ""
-echo -e "  ${BOLD}${WHITE}┌─[${CYAN}4/4${WHITE}]${NC} ${BOLD}combine + dedup${NC} ${DIM}— merge all sources + sort -u${NC}"
+echo -e "  ${BOLD}${WHITE}┌─[${CYAN}5/5${WHITE}]${NC} ${BOLD}combine + dedup${NC} ${DIM}— merge all sources + sort -u${NC}"
 STEP_START=$(date +%s)
 cat \
     "$OUTPUT_DIR/katana/urls.txt" \
     "$OUTPUT_DIR/gospider/combined.txt" \
     "$OUTPUT_DIR/xnlink.txt" \
+    "$OUTPUT_DIR/cariddi/results.txt" \
     2>/dev/null | \
     grep -E "^https?://" | \
     sort -u > "$OUTPUT_DIR/combined/all-urls.txt" || true
@@ -186,7 +205,7 @@ ok "combined" "$TOTAL" "$(elapsed_since $STEP_START)"
 STEP_START=$(date +%s)
 if command -v httpx &>/dev/null; then
     echo ""
-    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}+${WHITE}]${NC} ${BOLD}httpx${NC} ${DIM}— probe alive URLs + detect tech stack${NC}"
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}+${WHITE}]${NC} ${BOLD}httpx${NC} ${DIM}— probe alive URLs + detect tech stack${NC} ${DIM}[bonus]${NC}"
     run_tool "httpx" "$OUTPUT_DIR/httpx_tool.log" \
         httpx \
             -l "$OUTPUT_DIR/combined/all-urls.txt" \
@@ -225,6 +244,7 @@ _print_row() {
 _print_row "katana"        "$KATANA_C"
 _print_row "gospider"      "$GOSPIDER_C"
 _print_row "xnLinkFinder"  "$XNLINK_C"
+_print_row "cariddi"       "${CARIDDI_C:-0}"
 echo -e "${BOLD}${WHITE}  ├──────────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 printf   "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${WHITE}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "Total unique" "$TOTAL" | tee -a "$OUTPUT_DIR/scan.log"
 printf   "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${GREEN}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "Alive (httpx)" "$ALIVE_C" | tee -a "$OUTPUT_DIR/scan.log"

@@ -23,6 +23,8 @@ print_banner() {
     echo "╠══════════════════════════════════════════════════════════════╣"
     echo "║  Tools: katana • gau • waymore • gospider • xnLinkFinder    ║"
     echo "║         httpx • nuclei • dnsx • subfinder • gf              ║"
+    echo "║         cariddi • mantra • gitleaks                        ║"
+    echo "║         SecretFinder • JSScanner  (Python)                 ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -48,9 +50,26 @@ check_tools() {
         "waymore:Waymore (Python)"
         "xnLinkFinder:xnLinkFinder (Python)"
         "uro:URO (URL dedup)"
+        "cariddi:Cariddi (deep crawler)"
+        "mantra:Mantra (secret hunter)"
+        "gitleaks:Gitleaks (credential leak scanner)"
         "node:Node.js"
         "python3:Python 3"
     )
+    # Note: SecretFinder and JSScanner are Python scripts (not in PATH)
+    # Check them separately as file presence
+    if [ -f /opt/SecretFinder/SecretFinder.py ]; then
+        echo -e "  ${GREEN}✓${NC} ${WHITE}SecretFinder (Python script)${NC} - /opt/SecretFinder/SecretFinder.py"
+    else
+        echo -e "  ${RED}✗${NC} ${WHITE}SecretFinder (Python script)${NC} - ${RED}NOT FOUND at /opt/SecretFinder/${NC}"
+        ALL_OK=false
+    fi
+    if [ -f /opt/JSScanner/JSScanner.py ]; then
+        echo -e "  ${GREEN}✓${NC} ${WHITE}JSScanner (Python script)${NC} - /opt/JSScanner/JSScanner.py"
+    else
+        echo -e "  ${RED}✗${NC} ${WHITE}JSScanner (Python script)${NC} - ${RED}NOT FOUND at /opt/JSScanner/${NC}"
+        ALL_OK=false
+    fi
     
     ALL_OK=true
     for item in "${TOOLS[@]}"; do

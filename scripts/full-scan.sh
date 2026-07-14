@@ -50,7 +50,7 @@ OUTPUT_DIR="/workspace/output/${DOMAIN}_${TIMESTAMP}"
 # ── Waymore max processes (hard limit: 1–5) ─────────────────
 WAYMORE_PROCS=$(( THREADS > 5 ? 5 : THREADS ))
 
-mkdir -p "$OUTPUT_DIR"/{katana,gau,gospider,waymore,xnlink,httpx,subdomains,combined,reports}
+mkdir -p "$OUTPUT_DIR"/{katana,gau,gospider,waymore,xnlink,httpx,cariddi,secrets,subdomains,combined,reports}
 
 # ── Pre-create all output files (wc -l never fails) ─────────
 touch "$OUTPUT_DIR/katana/results.txt"
@@ -66,6 +66,10 @@ touch "$OUTPUT_DIR/combined/urls-with-params.txt"
 touch "$OUTPUT_DIR/combined/js-files.txt"
 touch "$OUTPUT_DIR/combined/api-endpoints.txt"
 touch "$OUTPUT_DIR/combined/admin-pages.txt"
+touch "$OUTPUT_DIR/cariddi/results.txt"
+touch "$OUTPUT_DIR/secrets/mantra.txt"
+touch "$OUTPUT_DIR/secrets/gitleaks.txt"
+touch "$OUTPUT_DIR/secrets/secretfinder.txt"
 
 # Pre-create gf output files
 GF_PATTERN_NAMES=(xss sqli ssrf idor lfi rce redirect debug_logic secrets upload)
@@ -177,7 +181,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────
 # PHASE 1: URL Collection
 # ─────────────────────────────────────────────────────────────
-phase_banner "1" "URL COLLECTION  (6 tools)"
+phase_banner "1" "URL COLLECTION  (7 tools)"
 
 # 1.1 katana
 STEP_START=$(date +%s)
@@ -281,14 +285,36 @@ fi
 # 1.6 waybackurls
 STEP_START=$(date +%s)
 if command -v waybackurls &>/dev/null; then
-    tool_header "6/6" "waybackurls" "wayback machine URL history"
+    tool_header "6/7" "waybackurls" "wayback machine URL history"
     run_tool "waybackurls" "$OUTPUT_DIR/waymore/wayback_tool.log" \
         bash -c "echo '$DOMAIN' | waybackurls > '$OUTPUT_DIR/waymore/wayback.txt'"
     WAYBACK_COUNT=$(wc -l < "$OUTPUT_DIR/waymore/wayback.txt" 2>/dev/null || echo 0)
     ok "waybackurls" "$WAYBACK_COUNT URLs" "$(elapsed_since $STEP_START)"
 else
-    skip "waybackurls [6/6]"
+    skip "waybackurls [6/7]"
     WAYBACK_COUNT=0
+fi
+
+# 1.7 cariddi — in-depth crawler: endpoints, secrets, extensions
+STEP_START=$(date +%s)
+if command -v cariddi &>/dev/null; then
+    tool_header "7/7" "cariddi" "in-depth crawl: endpoints, extensions, secrets"
+    run_tool "cariddi" "$OUTPUT_DIR/cariddi/tool.log" \
+        bash -c "echo '$TARGET' | cariddi \
+            -s \
+            -ext 1 \
+            -e \
+            -eps \
+            -sf \
+            -info \
+            -d '$DEPTH' \
+            -t '$THREADS' \
+            2>/dev/null | tee '$OUTPUT_DIR/cariddi/results.txt'"
+    CARIDDI_COUNT=$(wc -l < "$OUTPUT_DIR/cariddi/results.txt" 2>/dev/null || echo 0)
+    ok "cariddi" "$CARIDDI_COUNT URLs/findings" "$(elapsed_since $STEP_START)"
+else
+    skip "cariddi [7/7]"
+    CARIDDI_COUNT=0
 fi
 
 # ─────────────────────────────────────────────────────────────
@@ -304,11 +330,10 @@ cat "$OUTPUT_DIR/katana/results.txt" \
     "$OUTPUT_DIR/waymore/results.txt" \
     "$OUTPUT_DIR/waymore/wayback.txt" \
     "$OUTPUT_DIR/xnlink/results.txt" \
+    "$OUTPUT_DIR/cariddi/results.txt" \
     2>/dev/null | \
     grep -E "^https?://" | \
     sort -u > "$OUTPUT_DIR/combined/all-urls-raw.txt" || true
-
-COMBINED_RAW=$(wc -l < "$OUTPUT_DIR/combined/all-urls-raw.txt" 2>/dev/null || echo 0)
 echo -e "  ${DIM}Combined raw (pre-dedup) :${NC} ${WHITE}${COMBINED_RAW}${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 
 if command -v uro &>/dev/null; then
@@ -491,6 +516,94 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
+# PHASE 4.5: Secret Scanning (mantra + Gitleaks + SecretFinder)
+# ─────────────────────────────────────────────────────────────
+phase_banner "4.5" "SECRET SCANNING  (mantra + Gitleaks + SecretFinder)"
+
+MANTRA_COUNT=0
+GITLEAKS_COUNT=0
+SF_COUNT=0
+
+# 4.5.1 mantra — scan deduped URL list for exposed secrets in responses
+STEP_START=$(date +%s)
+if command -v mantra &>/dev/null && [ "$DEDUP_COUNT" -gt 0 ]; then
+    tool_header "1/3" "mantra" "hunt secrets/keys buried in JS/HTML responses"
+    run_tool "mantra" "$OUTPUT_DIR/secrets/mantra.txt" \
+        bash -c "cat '$OUTPUT_DIR/combined/all-urls-dedup.txt' | mantra 2>/dev/null"
+    MANTRA_COUNT=$(wc -l < "$OUTPUT_DIR/secrets/mantra.txt" 2>/dev/null || echo 0)
+    if [ "$MANTRA_COUNT" -gt 0 ]; then
+        echo -e "  ${RED}[!]${NC} ${BOLD}mantra${NC}: ${YELLOW}${MANTRA_COUNT} secrets/keys found!${NC}" \
+            | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        ok "mantra" "no secrets detected" "$(elapsed_since $STEP_START)"
+    fi
+else
+    skip "mantra [1/3]"
+fi
+
+# 4.5.2 Gitleaks — scan output directory for secrets/credentials
+STEP_START=$(date +%s)
+if command -v gitleaks &>/dev/null; then
+    tool_header "2/3" "gitleaks" "scan output files for leaked credentials/keys"
+    # Gitleaks detects-mode on the combined output files
+    run_tool "gitleaks" "$OUTPUT_DIR/secrets/gitleaks.log" \
+        gitleaks detect \
+            --source "$OUTPUT_DIR" \
+            --report-path "$OUTPUT_DIR/secrets/gitleaks.txt" \
+            --report-format json \
+            --no-git \
+            --exit-code 0
+    GITLEAKS_COUNT=$(grep -c '"RuleID"' "$OUTPUT_DIR/secrets/gitleaks.txt" 2>/dev/null || echo 0)
+    if [ "$GITLEAKS_COUNT" -gt 0 ]; then
+        echo -e "  ${RED}[!]${NC} ${BOLD}gitleaks${NC}: ${YELLOW}${GITLEAKS_COUNT} potential leaks found!${NC}" \
+            | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        ok "gitleaks" "no leaks detected" "$(elapsed_since $STEP_START)"
+    fi
+else
+    skip "gitleaks [2/3]"
+fi
+
+# 4.5.3 SecretFinder — scan JS files found in collection phase
+STEP_START=$(date +%s)
+SF_SCRIPT="/opt/SecretFinder/SecretFinder.py"
+if [ -f "$SF_SCRIPT" ] && [ "$JS_COUNT" -gt 0 ] 2>/dev/null; then
+    JS_COUNT=$(wc -l < "$OUTPUT_DIR/combined/js-files.txt" 2>/dev/null || echo 0)
+    tool_header "3/3" "SecretFinder" "scan ${JS_COUNT} JS files for API keys, tokens, secrets"
+    SF_PROCESSED=0
+    while IFS= read -r js_url; do
+        [ -z "$js_url" ] && continue
+        SF_PROCESSED=$(( SF_PROCESSED + 1 ))
+        printf "\r  ${DIM}│  [%d/%d] %s${NC}" "$SF_PROCESSED" "$JS_COUNT" "$(basename "$js_url")"
+        python3 "$SF_SCRIPT" -i "$js_url" -o cli 2>/dev/null | \
+            grep -vE "^\[|^$|^-{20}|SecretFinder" >> \
+            "$OUTPUT_DIR/secrets/secretfinder.txt" || true
+    done < "$OUTPUT_DIR/combined/js-files.txt"
+    printf "\r%80s\r" ""
+    SF_COUNT=$(wc -l < "$OUTPUT_DIR/secrets/secretfinder.txt" 2>/dev/null || echo 0)
+    if [ "$SF_COUNT" -gt 0 ]; then
+        echo -e "  ${RED}[!]${NC} ${BOLD}SecretFinder${NC}: ${YELLOW}${SF_COUNT} secrets found!${NC}" \
+            | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        ok "SecretFinder" "no secrets detected" "$(elapsed_since $STEP_START)"
+    fi
+elif [ ! -f "$SF_SCRIPT" ]; then
+    skip "SecretFinder [3/3] — not installed"
+else
+    skip "SecretFinder [3/3] — no JS files"
+fi
+
+# Secret scan summary
+SECRET_TOTAL=$(( MANTRA_COUNT + GITLEAKS_COUNT + SF_COUNT ))
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+if [ "$SECRET_TOTAL" -gt 0 ]; then
+    echo -e "  ${RED}[!] TOTAL SECRET FINDINGS: ${BOLD}${SECRET_TOTAL}${NC}${RED} — CHECK OUTPUT DIR${NC}" \
+        | tee -a "$OUTPUT_DIR/scan.log"
+else
+    echo -e "  ${GREEN}[✓] Secret scan complete — no leaks detected${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+fi
+
+# ─────────────────────────────────────────────────────────────
 # PHASE 5: URL Categorization
 # ─────────────────────────────────────────────────────────────
 phase_banner "5" "URL CATEGORIZATION"
@@ -565,13 +678,22 @@ printf '  %-22s  %10s\n' "gospider"       "$GOSPIDER_COUNT"
 printf '  %-22s  %10s\n' "waymore"        "$WAYMORE_COUNT"
 printf '  %-22s  %10s\n' "waybackurls"    "$WAYBACK_COUNT"
 printf '  %-22s  %10s\n' "xnLinkFinder"   "$XNLINK_COUNT"
+printf '  %-22s  %10s\n' "cariddi"        "${CARIDDI_COUNT:-0}"
 printf '  %-22s  %10s\n' "──────────────────────" "──────────"
 printf '  %-22s  %10s\n' "Combined (raw)"     "$COMBINED_RAW"
 printf '  %-22s  %10s\n' "After dedup (uro)"  "$DEDUP_COUNT"
 printf '  %-22s  %10s\n' "Alive (httpx)"      "$ALIVE_COUNT"
 printf '\n'
+printf '  SECTION 3 — SECRET SCAN  (mantra + Gitleaks + SecretFinder)\n'
 printf '==================================================================\n'
-printf '  SECTION 2 — SECURITY FINDINGS  (gf pattern scan)\n'
+printf '\n'
+printf '  %-22s  %10s\n' "mantra"         "${MANTRA_COUNT:-0}"
+printf '  %-22s  %10s\n' "Gitleaks"       "${GITLEAKS_COUNT:-0}"
+printf '  %-22s  %10s\n' "SecretFinder"   "${SF_COUNT:-0}"
+printf '  %-22s  %10s\n' "TOTAL secrets"  "$(( ${MANTRA_COUNT:-0} + ${GITLEAKS_COUNT:-0} + ${SF_COUNT:-0} ))"
+printf '\n'
+printf '==================================================================\n'
+printf '  SECTION 4 — SECURITY FINDINGS  (gf pattern scan)\n'
 printf '==================================================================\n'
 printf '\n'
 
@@ -681,6 +803,7 @@ print_row "gospider"      "$GOSPIDER_COUNT"
 print_row "waymore"       "$WAYMORE_COUNT"
 print_row "waybackurls"   "$WAYBACK_COUNT"
 print_row "xnLinkFinder"  "$XNLINK_COUNT"
+print_row "cariddi"       "${CARIDDI_COUNT:-0}"
 echo -e "${BOLD}${WHITE}  ├────────────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 printf   "  ${BOLD}${WHITE}│${NC}  %-22s  ${BOLD}${WHITE}│${NC}  ${WHITE}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" \
     "Combined (raw)" "$COMBINED_RAW" | tee -a "$OUTPUT_DIR/scan.log"
@@ -690,6 +813,29 @@ printf   "  ${BOLD}${WHITE}│${NC}  %-22s  ${BOLD}${WHITE}│${NC}  ${GREEN}%8s
     "Alive (httpx)" "$ALIVE_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
 echo -e "${BOLD}${WHITE}  └────────────────────────┴────────────┘${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+
+# Section: Secret Scan Results
+echo -e "  ${BOLD}${CYAN}[ SECRET SCAN RESULTS — mantra + Gitleaks + SecretFinder ]${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ┌─────────────────────┬──────────┬───────────────────────────┐${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  │${NC}  ${DIM}Tool${NC}                 ${BOLD}${WHITE}│${NC}  ${DIM}Secrets${NC} ${BOLD}${WHITE}│${NC}  ${DIM}Notes${NC}                      ${BOLD}${WHITE}│${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ├─────────────────────┼──────────┼───────────────────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+
+_secret_row() {
+    local tool="$1" cnt="$2" note="$3"
+    if [ "${cnt:-0}" -gt 0 ] 2>/dev/null; then
+        printf "  ${BOLD}${WHITE}│${NC}  ${RED}%-19s${NC}  ${BOLD}${WHITE}│${NC}  ${RED}%6s${NC}  ${BOLD}${WHITE}│${NC}  ${YELLOW}%-25s${NC}  ${BOLD}${WHITE}│${NC}\n" \
+            "$tool" "$cnt" "$note" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${BOLD}${WHITE}│${NC}  ${DIM}%-19s  │  %6s  │  %-25s${NC}  ${BOLD}${WHITE}│${NC}\n" \
+            "$tool" "0" "clean" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
+}
+_secret_row "mantra"        "${MANTRA_COUNT:-0}"    "keys/tokens in responses"
+_secret_row "Gitleaks"      "${GITLEAKS_COUNT:-0}"  "credentials/keys in files"
+_secret_row "SecretFinder"  "${SF_COUNT:-0}"        "secrets in JS files"
+echo -e "${BOLD}${WHITE}  └─────────────────────┴──────────┴───────────────────────────┘${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 echo "" | tee -a "$OUTPUT_DIR/scan.log"
 
 # Section 2: Security findings (colored severity)
@@ -778,6 +924,12 @@ echo -e "${BOLD}${GREEN}╠═════════════════�
 printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Total URLs found :" "${DEDUP_COUNT}  (${COMBINED_RAW} raw)" | tee -a "$OUTPUT_DIR/scan.log"
 printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Alive URLs :"       "$ALIVE_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
 printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${TOT_COLOR}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Security risk :"    "$RISK_BADGE  ($GF_GRAND_TOTAL findings)" | tee -a "$OUTPUT_DIR/scan.log"
+# Secret findings line — only shown when secrets were found
+if [ "${SECRET_TOTAL:-0}" -gt 0 ]; then
+    printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${RED}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Secret findings :"  "⚠  ${SECRET_TOTAL} leaked secrets/keys!" | tee -a "$OUTPUT_DIR/scan.log"
+else
+    printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${DIM}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Secret findings :"  "0  (clean)" | tee -a "$OUTPUT_DIR/scan.log"
+fi
 printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Scan duration :"    "${TOTAL_MM}m ${TOTAL_SS}s" | tee -a "$OUTPUT_DIR/scan.log"
 printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${CYAN}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Report file :"      "$REPORT_FILE" | tee -a "$OUTPUT_DIR/scan.log"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}" | tee -a "$OUTPUT_DIR/scan.log"
