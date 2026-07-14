@@ -4,7 +4,9 @@
 # Usage: ./full-scan.sh <target_url> [options]
 # ============================================================
 
-set -euo pipefail
+# NOTE: -e removed intentionally — tools may return non-zero exit codes
+# and we must NOT abort the whole scan; each tool gets || true
+set -uo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -33,16 +35,33 @@ OUTPUT_DIR="/workspace/output/${DOMAIN}_${TIMESTAMP}"
 
 mkdir -p "$OUTPUT_DIR"/{katana,gau,gospider,waymore,xnlink,httpx,subdomains,combined,reports}
 
+# ── Logging helpers ── emit immediately, no buffering ──────
 log() {
     echo -e "${GREEN}[$(date +%H:%M:%S)] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 }
 
 warn() {
-    echo -e "${YELLOW}[$(date +%H:%M:%S)] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    echo -e "${YELLOW}[WARN][$(date +%H:%M:%S)] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 }
 
 info() {
-    echo -e "${BLUE}[$(date +%H:%M:%S)] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    echo -e "${BLUE}[INFO][$(date +%H:%M:%S)] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+}
+
+run_tool() {
+    # run_tool <label> <logfile> -- <cmd...>
+    # Streams every stdout+stderr line live through tee into logfile.
+    # Never aborts the parent script on non-zero exit.
+    local label="$1"
+    local logfile="$2"
+    shift 2
+    # skip the "--" separator if present
+    [ "${1:-}" = "--" ] && shift
+    echo -e "${CYAN}[$(date +%H:%M:%S)][${label}] starting...${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    # stdbuf -oL forces line-buffered C stdio so Go/Python tools don't batch output
+    stdbuf -oL "$@" 2>&1 | tee -a "$logfile" | tee -a "$OUTPUT_DIR/scan.log" || \
+        warn "${label} exited with non-zero status (continuing)"
+    echo -e "${CYAN}[$(date +%H:%M:%S)][${label}] done.${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -64,105 +83,109 @@ log "=== PHASE 1: URL COLLECTION ==="
 # 1.1 katana
 if command -v katana &>/dev/null; then
     log "[1/6] Running katana..."
-    katana \
-        -u "$TARGET" \
-        -d "$DEPTH" \
-        -c "$THREADS" \
-        -timeout "$TIMEOUT" \
-        -jc \
-        -fx \
-        -xhr \
-        -aff \
-        -rl 150 \
-        -o "$OUTPUT_DIR/katana/results.txt" \
-        -jsonl "$OUTPUT_DIR/katana/results.jsonl" \
-        2>&1 | tail -5 || warn "katana encountered an issue"
-    
+    run_tool "katana" "$OUTPUT_DIR/katana/tool.log" \
+        katana \
+            -u "$TARGET" \
+            -d "$DEPTH" \
+            -c "$THREADS" \
+            -timeout "$TIMEOUT" \
+            -jc \
+            -fx \
+            -xhr \
+            -aff \
+            -rl 150 \
+            -o "$OUTPUT_DIR/katana/results.txt" \
+            -jsonl "$OUTPUT_DIR/katana/results.jsonl"
     KATANA_COUNT=$(wc -l < "$OUTPUT_DIR/katana/results.txt" 2>/dev/null || echo 0)
     log "  katana found: $KATANA_COUNT URLs"
 else
     warn "katana not available, skipping..."
+    KATANA_COUNT=0
 fi
 
 # 1.2 gau
 if command -v gau &>/dev/null; then
     log "[2/6] Running gau (wayback machine + common crawl)..."
-    echo "$DOMAIN" | gau \
-        --threads "$THREADS" \
-        --timeout "$TIMEOUT" \
-        --providers wayback,commoncrawl,otx,urlscan \
-        --blacklist png,jpg,gif,jpeg,webp,svg,ico,css,woff,woff2,ttf,eot \
-        --o "$OUTPUT_DIR/gau/results.txt" \
-        2>&1 | tail -5 || warn "gau encountered an issue"
-    
+    run_tool "gau" "$OUTPUT_DIR/gau/tool.log" \
+        bash -c "echo '$DOMAIN' | stdbuf -oL gau \
+            --threads '$THREADS' \
+            --timeout '$TIMEOUT' \
+            --providers wayback,commoncrawl,otx,urlscan \
+            --blacklist png,jpg,gif,jpeg,webp,svg,ico,css,woff,woff2,ttf,eot \
+            --o '$OUTPUT_DIR/gau/results.txt'"
     GAU_COUNT=$(wc -l < "$OUTPUT_DIR/gau/results.txt" 2>/dev/null || echo 0)
     log "  gau found: $GAU_COUNT URLs"
 else
     warn "gau not available, skipping..."
+    GAU_COUNT=0
 fi
 
 # 1.3 gospider
 if command -v gospider &>/dev/null; then
     log "[3/6] Running gospider..."
-    gospider \
-        -s "$TARGET" \
-        -o "$OUTPUT_DIR/gospider/" \
-        -c "$THREADS" \
-        -d "$DEPTH" \
-        -t "$TIMEOUT" \
-        --js \
-        --sitemap \
-        --robots \
-        --other-source \
-        -a \
-        2>&1 | tail -5 || warn "gospider encountered an issue"
-    
+    run_tool "gospider" "$OUTPUT_DIR/gospider/tool.log" \
+        gospider \
+            -s "$TARGET" \
+            -o "$OUTPUT_DIR/gospider/" \
+            -c "$THREADS" \
+            -d "$DEPTH" \
+            -t "$TIMEOUT" \
+            --js \
+            --sitemap \
+            --robots \
+            --other-source \
+            -a
     GOSPIDER_COUNT=$(cat "$OUTPUT_DIR/gospider/"* 2>/dev/null | wc -l || echo 0)
     log "  gospider found: $GOSPIDER_COUNT entries"
 else
     warn "gospider not available, skipping..."
+    GOSPIDER_COUNT=0
 fi
 
 # 1.4 waymore
 if command -v waymore &>/dev/null; then
     log "[4/6] Running waymore..."
-    waymore \
-        -i "$DOMAIN" \
-        -mode U \
-        -oU "$OUTPUT_DIR/waymore/results.txt" \
-        -p "$THREADS" \
-        2>&1 | tail -5 || warn "waymore encountered an issue"
-    
+    run_tool "waymore" "$OUTPUT_DIR/waymore/tool.log" \
+        waymore \
+            -i "$DOMAIN" \
+            -mode U \
+            -oU "$OUTPUT_DIR/waymore/results.txt" \
+            -p "$THREADS"
     WAYMORE_COUNT=$(wc -l < "$OUTPUT_DIR/waymore/results.txt" 2>/dev/null || echo 0)
     log "  waymore found: $WAYMORE_COUNT URLs"
 else
     warn "waymore not available, skipping..."
+    WAYMORE_COUNT=0
 fi
 
 # 1.5 xnLinkFinder
 if command -v xnLinkFinder &>/dev/null; then
     log "[5/6] Running xnLinkFinder..."
-    xnLinkFinder \
-        -i "$TARGET" \
-        -op "$OUTPUT_DIR/xnlink/results.txt" \
-        -sp "$TARGET" \
-        -sf "$DOMAIN" \
-        -d "$DEPTH" \
-        -p "$THREADS" \
-        2>&1 | tail -5 || warn "xnLinkFinder encountered an issue"
-    
+    run_tool "xnLinkFinder" "$OUTPUT_DIR/xnlink/tool.log" \
+        xnLinkFinder \
+            -i "$TARGET" \
+            -op "$OUTPUT_DIR/xnlink/results.txt" \
+            -sp "$TARGET" \
+            -sf "$DOMAIN" \
+            -d "$DEPTH" \
+            -p "$THREADS"
     XNLINK_COUNT=$(wc -l < "$OUTPUT_DIR/xnlink/results.txt" 2>/dev/null || echo 0)
     log "  xnLinkFinder found: $XNLINK_COUNT links"
 else
     warn "xnLinkFinder not available, skipping..."
+    XNLINK_COUNT=0
 fi
 
 # 1.6 waybackurls
 if command -v waybackurls &>/dev/null; then
     log "[6/6] Running waybackurls..."
-    echo "$DOMAIN" | waybackurls > "$OUTPUT_DIR/waymore/wayback.txt" 2>/dev/null || warn "waybackurls encountered an issue"
+    run_tool "waybackurls" "$OUTPUT_DIR/waymore/wayback_tool.log" \
+        bash -c "echo '$DOMAIN' | stdbuf -oL waybackurls > '$OUTPUT_DIR/waymore/wayback.txt'"
     WAYBACK_COUNT=$(wc -l < "$OUTPUT_DIR/waymore/wayback.txt" 2>/dev/null || echo 0)
     log "  waybackurls found: $WAYBACK_COUNT URLs"
+else
+    warn "waybackurls not available, skipping..."
+    WAYBACK_COUNT=0
 fi
 
 # ─── PHASE 2: URL Deduplication ──────────────────────────────
@@ -176,19 +199,20 @@ cat "$OUTPUT_DIR/katana/results.txt" \
     "$OUTPUT_DIR/xnlink/results.txt" \
     2>/dev/null | \
     grep -E "^https?://" | \
-    sort -u > "$OUTPUT_DIR/combined/all-urls-raw.txt"
+    sort -u > "$OUTPUT_DIR/combined/all-urls-raw.txt" || true
 
-COMBINED_RAW=$(wc -l < "$OUTPUT_DIR/combined/all-urls-raw.txt")
+COMBINED_RAW=$(wc -l < "$OUTPUT_DIR/combined/all-urls-raw.txt" 2>/dev/null || echo 0)
 log "Total raw URLs: $COMBINED_RAW"
 
 # Deduplicate with uro if available
 if command -v uro &>/dev/null; then
     log "Deduplicating with uro..."
-    uro < "$OUTPUT_DIR/combined/all-urls-raw.txt" > "$OUTPUT_DIR/combined/all-urls-dedup.txt" 2>/dev/null
-    DEDUP_COUNT=$(wc -l < "$OUTPUT_DIR/combined/all-urls-dedup.txt")
+    uro < "$OUTPUT_DIR/combined/all-urls-raw.txt" > "$OUTPUT_DIR/combined/all-urls-dedup.txt" 2>/dev/null || true
+    DEDUP_COUNT=$(wc -l < "$OUTPUT_DIR/combined/all-urls-dedup.txt" 2>/dev/null || echo 0)
     log "After dedup: $DEDUP_COUNT unique URLs"
 else
-    cp "$OUTPUT_DIR/combined/all-urls-raw.txt" "$OUTPUT_DIR/combined/all-urls-dedup.txt"
+    cp "$OUTPUT_DIR/combined/all-urls-raw.txt" "$OUTPUT_DIR/combined/all-urls-dedup.txt" || true
+    DEDUP_COUNT=$COMBINED_RAW
 fi
 
 # ─── PHASE 3: HTTP Probing ────────────────────────────────────
@@ -196,25 +220,25 @@ log "=== PHASE 3: HTTP PROBING ==="
 
 if command -v httpx &>/dev/null; then
     log "Running httpx on discovered URLs..."
-    httpx \
-        -l "$OUTPUT_DIR/combined/all-urls-dedup.txt" \
-        -o "$OUTPUT_DIR/httpx/alive-urls.txt" \
-        -json "$OUTPUT_DIR/httpx/results.json" \
-        -title \
-        -status-code \
-        -content-length \
-        -content-type \
-        -web-server \
-        -tech-detect \
-        -follow-redirects \
-        -threads "$THREADS" \
-        -timeout "$TIMEOUT" \
-        2>&1 | tail -10 || warn "httpx encountered an issue"
-    
+    run_tool "httpx" "$OUTPUT_DIR/httpx/tool.log" \
+        httpx \
+            -l "$OUTPUT_DIR/combined/all-urls-dedup.txt" \
+            -o "$OUTPUT_DIR/httpx/alive-urls.txt" \
+            -json "$OUTPUT_DIR/httpx/results.json" \
+            -title \
+            -status-code \
+            -content-length \
+            -content-type \
+            -web-server \
+            -tech-detect \
+            -follow-redirects \
+            -threads "$THREADS" \
+            -timeout "$TIMEOUT"
     ALIVE_COUNT=$(wc -l < "$OUTPUT_DIR/httpx/alive-urls.txt" 2>/dev/null || echo 0)
     log "Alive URLs: $ALIVE_COUNT"
 else
     warn "httpx not available"
+    ALIVE_COUNT=0
 fi
 
 # ─── PHASE 4: URL Categorization ─────────────────────────────
@@ -222,7 +246,7 @@ log "=== PHASE 4: URL CATEGORIZATION ==="
 
 if command -v gf &>/dev/null; then
     log "Running gf patterns..."
-    
+
     GF_PATTERNS=(
         "xss:xss"
         "sqli:sqli"
@@ -235,15 +259,14 @@ if command -v gf &>/dev/null; then
         "secrets:secrets"
         "upload:upload"
     )
-    
+
     for pattern_info in "${GF_PATTERNS[@]}"; do
         name="${pattern_info%%:*}"
         pattern="${pattern_info##*:}"
         output_file="$OUTPUT_DIR/combined/gf-${name}.txt"
-        
-        gf "$pattern" "$OUTPUT_DIR/combined/all-urls-dedup.txt" > "$output_file" 2>/dev/null && \
-            COUNT=$(wc -l < "$output_file") && \
-            log "  gf-$name: $COUNT URLs" || true
+        gf "$pattern" "$OUTPUT_DIR/combined/all-urls-dedup.txt" > "$output_file" 2>/dev/null || true
+        COUNT=$(wc -l < "$output_file" 2>/dev/null || echo 0)
+        log "  gf-$name: $COUNT URLs"
     done
 fi
 
