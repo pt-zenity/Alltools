@@ -68,6 +68,15 @@ function broadcastJob(jobId, data) {
 
 // ── Tool availability ────────────────────────────────────────
 async function checkTools() {
+  // Extended PATH so Go-installed tools and Python venv tools are found
+  const TOOL_PATH = [
+    process.env.PATH,
+    '/usr/local/bin',
+    '/opt/venv/bin',
+    '/root/go/bin',
+    '/usr/local/go/bin'
+  ].join(':');
+
   const tools = [
     { name: 'katana',       cmd: 'katana',       flag: '-version'  },
     { name: 'gau',          cmd: 'gau',          flag: '--version' },
@@ -84,14 +93,24 @@ async function checkTools() {
     { name: 'gf',           cmd: 'gf',           flag: '-h'        },
     { name: 'uro',          cmd: 'uro',          flag: '--help'    },
     { name: 'unfurl',       cmd: 'unfurl',       flag: '-h'        },
+    // ── NEW TOOLS v2026.6.0 ────────────────────────────────────
+    { name: 'cariddi',      cmd: 'cariddi',      flag: '-h'        },
+    { name: 'mantra',       cmd: 'mantra',       flag: '-h'        },
+    { name: 'gitleaks',     cmd: 'gitleaks',     flag: 'version'   },
     { name: 'node',         cmd: 'node',         flag: '--version' },
     { name: 'python3',      cmd: 'python3',      flag: '--version' },
   ];
 
-  return Promise.all(tools.map(t => new Promise(resolve => {
+  // Python script tools — checked via file presence, not PATH
+  const scriptTools = [
+    { name: 'SecretFinder', path: '/opt/SecretFinder/SecretFinder.py' },
+    { name: 'JSScanner',    path: '/opt/JSScanner/script.sh'          },
+  ];
+
+  const cmdResults = await Promise.all(tools.map(t => new Promise(resolve => {
     const p = spawn(t.cmd, [t.flag], {
       timeout: 5000,
-      env: { ...process.env, PATH: process.env.PATH + ':/usr/local/bin:/opt/venv/bin' }
+      env: { ...process.env, PATH: TOOL_PATH }
     });
     let ver = '';
     p.stdout.on('data', d => { ver += d; });
@@ -103,6 +122,14 @@ async function checkTools() {
     }));
     p.on('error', () => resolve({ name: t.name, available: false, version: 'not found' }));
   })));
+
+  const scriptResults = scriptTools.map(t => ({
+    name:      t.name,
+    available: fs.existsSync(t.path),
+    version:   fs.existsSync(t.path) ? t.path : 'not found'
+  }));
+
+  return [...cmdResults, ...scriptResults];
 }
 
 // ── Core: execute a scan job ─────────────────────────────────
@@ -168,7 +195,8 @@ function executeScan(jobId, type, options) {
       THREADS,
       DEPTH,
       TIMEOUT:         '15',
-      PATH:            `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`,
+      // Include /root/go/bin so cariddi, mantra, gitleaks are found at runtime
+      PATH:            `${process.env.PATH}:/usr/local/bin:/opt/venv/bin:/root/go/bin:/usr/local/go/bin`,
       VIRTUAL_ENV:     '/opt/venv',
       PYTHONUNBUFFERED:'1',
       FORCE_COLOR:     '0',
@@ -304,7 +332,7 @@ function walkDir(dir, out) {
 // ── REST API ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '2026.5.0', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '2026.6.0', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/tools', async (req, res) => {
@@ -440,7 +468,7 @@ app.post('/api/exec', (req, res) => {
   const { command, timeout: tmo = 30000 } = req.body;
   if (!command) return res.status(400).json({ error: 'Command required' });
   const p = spawn('/bin/bash', ['-c', command], {
-    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`, PYTHONUNBUFFERED: '1' },
+    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin:/root/go/bin:/usr/local/go/bin`, PYTHONUNBUFFERED: '1' },
     timeout: tmo
   });
   let out = '', err = '';
@@ -459,7 +487,7 @@ app.get('/api/exec/stream', (req, res) => {
   res.setHeader('Connection',    'keep-alive');
   res.flushHeaders();
   const p = spawn('/bin/bash', ['-c', command], {
-    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin`, PYTHONUNBUFFERED: '1' }
+    env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/opt/venv/bin:/root/go/bin:/usr/local/go/bin`, PYTHONUNBUFFERED: '1' }
   });
   const emit = (type, text) => res.write(`data: ${JSON.stringify({ type, text })}\n\n`);
   p.stdout.on('data', d => d.toString().split('\n').forEach(l => emit('stdout', l)));
@@ -614,8 +642,8 @@ app.get('*', (req, res) => {
 // ── Start ────────────────────────────────────────────────────
 server.listen(PORT, '0.0.0.0', () => {
   console.log('╔══════════════════════════════════════════════╗');
-  console.log('║   🕷️  Crawler Toolkit 2026  Dashboard v3      ║');
+  console.log('║   🕷️  Crawler Toolkit 2026  Dashboard v3.1    ║');
   console.log(`║   http://0.0.0.0:${PORT}                        ║`);
   console.log('╚══════════════════════════════════════════════╝');
-  checkTools().then(t => console.log(`[*] Tools: ${t.filter(x=>x.available).length}/${t.length} available`));
+  checkTools().then(t => console.log(`[*] Tools: ${t.filter(x=>x.available).length}/${t.length} available (v2026.6.0)`));
 });
