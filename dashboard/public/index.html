@@ -307,28 +307,37 @@
                     </div>
 
                     <!-- Live Output Panel -->
-                    <div class="panel" id="scan-output-panel" style="display:none">
-                        <div class="panel-header">
-                            <i class="fas fa-terminal"></i>
-                            <h3>Live Output</h3>
-                            <div class="panel-header-actions">
-                                <span id="live-job-id" class="badge-id"></span>
-                                <button class="btn-sm btn-danger" id="stop-btn" onclick="stopCurrentScan()">
-                                    <i class="fas fa-stop"></i> Stop
+                    <div id="scan-output-panel">
+                        <!-- Header bar -->
+                        <div class="output-panel-header">
+                            <span class="panel-title"><i class="fas fa-terminal"></i> LIVE OUTPUT</span>
+                            <span id="live-scan-status" class="live-status done">■ IDLE</span>
+                            <span id="live-scan-label"></span>
+
+                            <div class="output-meta">
+                                <span>JOB <span id="live-job-id" style="color:var(--accent)">—</span></span>
+                                <span id="output-line-count">0 lines</span>
+                                <span id="live-duration"></span>
+                            </div>
+
+                            <div class="output-panel-controls">
+                                <button class="btn-sm" id="autoscroll-btn" title="Auto-scroll" onclick="toggleAutoScroll()">
+                                    <i class="fas fa-arrow-down"></i> Auto
                                 </button>
-                                <button class="btn-sm" onclick="clearOutput()">
-                                    <i class="fas fa-trash"></i> Clear
+                                <button class="btn-sm" title="Scroll to bottom" onclick="scrollToBottom()">
+                                    <i class="fas fa-chevron-down"></i>
+                                </button>
+                                <button class="btn-sm" onclick="clearOutput()" title="Clear output">
+                                    <i class="fas fa-eraser"></i> Clear
+                                </button>
+                                <button class="btn-sm btn-danger" id="stop-btn" onclick="stopCurrentScan()" disabled title="Stop scan">
+                                    <i class="fas fa-stop-circle"></i> Stop
                                 </button>
                             </div>
                         </div>
-                        <div class="panel-body p0">
-                            <div id="output-terminal" class="terminal-output">
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span>
-                                    <span class="terminal-text">Waiting for output...</span>
-                                </div>
-                            </div>
-                        </div>
+
+                        <!-- Output terminal -->
+                        <div id="output-terminal"></div>
                     </div>
                 </div>
             </div>

@@ -1280,3 +1280,223 @@ html, body {
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .docs-grid { grid-template-columns: 1fr; }
 }
+
+/* ================================================================
+   REAL-TIME OUTPUT PANEL  (added: streaming fix)
+   ================================================================ */
+
+/* ── Scan Output Panel ──────────────────────── */
+#scan-output-panel {
+  display: none;
+  margin-top: 20px;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+  box-shadow: 0 0 30px rgba(99,102,241,0.12);
+}
+
+.output-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  user-select: none;
+}
+
+.output-panel-header .panel-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+.live-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0.08em;
+}
+
+.live-status.running {
+  color: var(--green);
+  background: var(--green-dim);
+  animation: pulse-status 1.4s ease-in-out infinite;
+}
+
+.live-status.done {
+  color: var(--text-secondary);
+  background: rgba(100,116,139,0.15);
+}
+
+@keyframes pulse-status {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+.output-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.output-meta span { color: var(--text-secondary); }
+
+.output-panel-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ── Live Terminal ──────────────────────────── */
+#output-terminal {
+  background: #04080f;
+  min-height: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  scroll-behavior: smooth;
+}
+
+/* Each line in the streaming output */
+.terminal-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  min-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Stream-type coloring */
+.terminal-line.stdout  .terminal-text { color: #c8f0d8; }
+.terminal-line.stderr  .terminal-text { color: #fca5a5; }
+.terminal-line.info    .terminal-text { color: #67e8f9; }
+.terminal-line.success .terminal-text { color: #86efac; font-weight: 600; }
+.terminal-line.warning .terminal-text { color: #fde68a; }
+
+.terminal-text {
+  flex: 1;
+  color: #c8f0d8;
+  word-break: break-all;
+}
+
+/* Line prefix badge */
+.line-prefix {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  width: 32px;
+  flex-shrink: 0;
+  text-align: right;
+  margin-right: 10px;
+  padding-top: 1px;
+  opacity: 0.7;
+  letter-spacing: 0.04em;
+}
+
+.stderr-prefix { color: #f87171; }
+.info-prefix   { color: #22d3ee; }
+.ok-prefix     { color: #4ade80; }
+.warn-prefix   { color: #fbbf24; }
+
+/* URLs in output are clickable */
+.output-url {
+  color: var(--cyan);
+  text-decoration: none;
+  opacity: 0.9;
+}
+.output-url:hover { text-decoration: underline; opacity: 1; }
+
+/* ── Output control buttons ─────────────────── */
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-bright);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-sm:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.btn-sm:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-sm.btn-danger { border-color: rgba(239,68,68,0.4); color: var(--red); }
+.btn-sm.btn-danger:hover { background: var(--red-dim); }
+.btn-sm.btn-danger:disabled { opacity: 0.3; }
+
+.btn-sm.btn-stop-active {
+  border-color: var(--red);
+  color: var(--red);
+  animation: pulse-btn 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-btn {
+  0%, 100% { box-shadow: none; }
+  50%       { box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+}
+
+#autoscroll-btn.active {
+  border-color: var(--green);
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+/* ── File viewer header ──────────────────────── */
+.file-viewer-header {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Jobs page live row ──────────────────────── */
+.active-job-row {
+  border-left: 3px solid var(--green);
+}
+
+/* ── Scan label in header ────────────────────── */
+#live-scan-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Duration display ────────────────────────── */
+#live-duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--cyan);
+}
+
+/* ── Scrollbar for output terminal ──────────── */
+#output-terminal::-webkit-scrollbar       { width: 5px; }
+#output-terminal::-webkit-scrollbar-track { background: #04080f; }
+#output-terminal::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.4); border-radius: 3px; }
+#output-terminal::-webkit-scrollbar-thumb:hover { background: var(--accent); }
