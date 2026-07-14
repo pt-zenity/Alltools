@@ -77,6 +77,12 @@ case "$1" in
     "dashboard"|"web"|"ui")
         print_banner
         check_tools
+        # Start SSH daemon for remote access (password: CrawlerKit2026!)
+        if command -v sshd &>/dev/null; then
+            /usr/sbin/sshd 2>/dev/null && \
+                echo -e "${GREEN}[✓] SSH server started on port 22${NC}" || \
+                echo -e "${YELLOW}[!] SSH server failed to start${NC}"
+        fi
         echo -e "${GREEN}[*] Starting Web Dashboard on port 3000...${NC}"
         cd /workspace/dashboard && node server.js
         ;;

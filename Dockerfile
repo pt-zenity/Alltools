@@ -243,15 +243,28 @@ RUN npm install --production 2>/dev/null || true
 WORKDIR /workspace
 
 # ── Setup gf patterns ────────────────────────────────────────
-RUN mkdir -p ~/.gf && \
-    git clone --depth=1 https://github.com/1ndianl33t/Gf-Patterns ~/.gf 2>/dev/null || \
-    mkdir -p ~/.gf && echo "gf patterns setup done"
+RUN mkdir -p /root/.gf && \
+    git clone --depth=1 https://github.com/1ndianl33t/Gf-Patterns /root/.gf 2>/dev/null || true && \
+    # Add missing patterns that Gf-Patterns repo doesn't include
+    printf '{"flags":"-iE","patterns":["apikey","api_key","secret","token","password","passwd","auth","authorization","bearer","access_token","private_key","client_secret","aws_secret","db_password","api_secret"]}' > /root/.gf/secrets.json && \
+    printf '{"flags":"-iE","patterns":["upload","file","attachment","multipart","enctype","fileupload","img","image","photo","avatar","media"]}' > /root/.gf/upload.json && \
+    echo "gf patterns setup done"
+
+# ── SSH server for remote access ─────────────────────────────
+RUN apk add --no-cache openssh-server socat && \
+    ssh-keygen -A && \
+    # Set root password for SSH access
+    echo 'root:CrawlerKit2026!' | chpasswd && \
+    # Configure sshd: allow root login with password
+    printf 'Port 22\nPermitRootLogin yes\nPasswordAuthentication yes\nChallengeResponseAuthentication no\n' > /etc/ssh/sshd_config && \
+    echo "SSH setup done"
 
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 3000 8080
+# 3000 = dashboard, 22 = SSH
+EXPOSE 3000 22
 
 VOLUME ["/workspace/output", "/workspace/targets", "/data", "/logs"]
 

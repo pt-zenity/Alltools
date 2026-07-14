@@ -362,6 +362,12 @@ if command -v gf &>/dev/null; then
         pattern="${pattern_info##*:}"
         output_file="$OUTPUT_DIR/combined/gf-${name}.txt"
         touch "$output_file"
+        # Skip if the pattern file doesn't exist in ~/.gf/
+        if ! gf "$pattern" /dev/null > /dev/null 2>&1; then
+            echo -e "  ${DIM}    gf-${name} → skipped (pattern not installed)${NC}" \
+                | tee -a "$OUTPUT_DIR/scan.log"
+            continue
+        fi
         gf "$pattern" "$OUTPUT_DIR/combined/all-urls-dedup.txt" > "$output_file" 2>/dev/null || true
         COUNT=$(wc -l < "$output_file" 2>/dev/null || echo 0)
         if [ "$COUNT" -gt 0 ]; then

@@ -302,7 +302,7 @@ function walkDir(dir, out) {
 // ── REST API ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '2026.3.0', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '2026.4.0', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/tools', async (req, res) => {
@@ -405,6 +405,32 @@ app.get('/api/download', (req, res) => {
 app.post('/api/upload/targets', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   res.json({ filename: req.file.originalname, path: req.file.path, size: req.file.size });
+});
+
+// SCP-like file deploy: POST /api/upload/file
+// Body: { path: '/workspace/scripts/full-scan.sh', content: '<base64>', executable: true }
+// This is the server-side of deploy.sh — allows any file to be pushed to any container path.
+app.post('/api/upload/file', (req, res) => {
+  const { path: destPath, content, executable = false, encoding = 'base64' } = req.body;
+  if (!destPath || !content) {
+    return res.status(400).json({ error: 'path and content are required' });
+  }
+  // Security: only allow writes inside /workspace or /root/.gf
+  const allowed = ['/workspace/', '/root/.gf/', '/etc/ssh/'];
+  const isAllowed = allowed.some(prefix => destPath.startsWith(prefix));
+  if (!isAllowed) {
+    return res.status(403).json({ error: `Writes only allowed under: ${allowed.join(', ')}` });
+  }
+  try {
+    const dir = path.dirname(destPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const buf = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8');
+    fs.writeFileSync(destPath, buf);
+    if (executable) fs.chmodSync(destPath, 0o755);
+    res.json({ ok: true, path: destPath, size: buf.length, executable });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Exec (non-streaming — for quick commands)
