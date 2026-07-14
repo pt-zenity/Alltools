@@ -15,6 +15,7 @@
 
 const express   = require('express');
 const http      = require('http');
+const net       = require('net');
 const WebSocket = require('ws');
 const { spawn } = require('child_process');
 const path      = require('path');
@@ -28,6 +29,7 @@ const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 
 const PORT        = process.env.PORT        || 3000;
+const SSH_PROXY_PORT = process.env.SSH_PROXY_PORT || 8890;
 const OUTPUT_DIR  = process.env.OUTPUT_DIR  || '/workspace/output';
 const SCRIPTS_DIR = process.env.SCRIPTS_DIR || '/workspace/scripts';
 
@@ -302,7 +304,7 @@ function walkDir(dir, out) {
 // ── REST API ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '2026.4.0', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '2026.5.0', timestamp: new Date().toISOString() });
 });
 
 app.get('/api/tools', async (req, res) => {
@@ -545,6 +547,63 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close',  () => { clientSubs.delete(ws); console.log('[WS] disconnect'); });
   ws.on('error',  () => { clientSubs.delete(ws); });
+});
+
+// ── SSH TCP Proxy Server (port 8890 → internal SSH port 22) ──────────────────
+// Allows SCP/SSH from outside when docker doesn't map port 22.
+// Connect to VPS:8890 and traffic is forwarded to container's sshd on :22
+const sshProxyServer = net.createServer((clientSocket) => {
+  const sshSocket = net.connect(22, '127.0.0.1', () => {
+    // Bi-directional pipe: client ↔ sshd
+    clientSocket.pipe(sshSocket);
+    sshSocket.pipe(clientSocket);
+  });
+
+  sshSocket.on('error', (err) => {
+    console.error('[SSH Proxy] SSH socket error:', err.message);
+    clientSocket.destroy();
+  });
+
+  clientSocket.on('error', (err) => {
+    console.error('[SSH Proxy] Client socket error:', err.message);
+    sshSocket.destroy();
+  });
+
+  sshSocket.on('close', () => clientSocket.destroy());
+  clientSocket.on('close', () => sshSocket.destroy());
+});
+
+sshProxyServer.listen(SSH_PROXY_PORT, '0.0.0.0', () => {
+  console.log(`[✓] SSH TCP Proxy  : port ${SSH_PROXY_PORT} → 127.0.0.1:22`);
+});
+
+sshProxyServer.on('error', (err) => {
+  console.error('[SSH Proxy] Server error:', err.message);
+});
+
+// ── HTTP CONNECT Proxy for SSH tunneling ─────────────────────────────────────
+// Allows: ssh -o ProxyCommand='curl --proxy http://VPS:8888 ...' root@127.0.0.1
+// When HTTP CONNECT comes in to tunnel to 127.0.0.1:22, we forward to sshd
+server.on('connect', (req, clientSocket, head) => {
+  const [targetHost, targetPort] = (req.url || '').split(':');
+  const port = parseInt(targetPort || '22', 10);
+
+  // Only allow tunneling to localhost SSH
+  if (targetHost !== '127.0.0.1' && targetHost !== 'localhost') {
+    clientSocket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    clientSocket.destroy();
+    return;
+  }
+
+  const sshSocket = net.connect(22, '127.0.0.1', () => {
+    clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    if (head && head.length > 0) sshSocket.write(head);
+    clientSocket.pipe(sshSocket);
+    sshSocket.pipe(clientSocket);
+  });
+
+  sshSocket.on('error', () => clientSocket.destroy());
+  clientSocket.on('error', () => sshSocket.destroy());
 });
 
 // ── Catch-all SPA ────────────────────────────────────────────

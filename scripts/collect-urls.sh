@@ -65,7 +65,8 @@ echo ""
 # ── gau ──────────────────────────────────────────────────────
 STEP_START=$(date +%s)
 if command -v gau &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[1/4] gau${NC} ${DIM}— wayback + commoncrawl + otx + urlscan${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/4${WHITE}]${NC} ${BOLD}gau${NC} ${DIM}— wayback + commoncrawl + otx + urlscan${NC}"
     # stdbuf forces line-buffered output so every line streams live
     echo "$DOMAIN" | stdbuf -oL gau \
         --threads "$THREADS" \
@@ -83,7 +84,8 @@ fi
 # ── waybackurls ───────────────────────────────────────────────
 STEP_START=$(date +%s)
 if command -v waybackurls &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[2/4] waybackurls${NC} ${DIM}— wayback machine URL history${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}waybackurls${NC} ${DIM}— wayback machine URL history${NC}"
     echo "$DOMAIN" | stdbuf -oL waybackurls 2>&1 | tee "$OUTPUT_DIR/wayback_live.log" | \
         grep -E "^https?://" > "$OUTPUT_DIR/wayback.txt" || true
     WB_C=$(wc -l < "$OUTPUT_DIR/wayback.txt" 2>/dev/null || echo 0)
@@ -97,7 +99,8 @@ fi
 # IMPORTANT: waymore -p/--processes max is 5 — use WAYMORE_PROCS not THREADS
 STEP_START=$(date +%s)
 if command -v waymore &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[3/4] waymore${NC} ${DIM}— extended archive search (procs=${WAYMORE_PROCS}/5 max)${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/4${WHITE}]${NC} ${BOLD}waymore${NC} ${DIM}— extended archive search  [procs=${WAYMORE_PROCS}/5 max]${NC}"
     # Pre-create the file — waymore may exit before writing if it errors
     touch "$OUTPUT_DIR/waymore.txt"
     stdbuf -oL waymore \
@@ -115,7 +118,8 @@ fi
 
 # ── Combine and deduplicate ───────────────────────────────────
 echo ""
-echo -e "${BOLD}${WHITE}  ┌─[4/4] dedup${NC} ${DIM}— combine + sort -u + uro${NC}"
+echo -e ""
+echo -e "  ${BOLD}${WHITE}┌─[${CYAN}4/4${WHITE}]${NC} ${BOLD}dedup${NC} ${DIM}— combine all sources + sort -u + uro${NC}"
 STEP_START=$(date +%s)
 
 cat "$OUTPUT_DIR/"*.txt 2>/dev/null | \
@@ -135,17 +139,40 @@ fi
 
 SCAN_END=$(date +%s)
 TOTAL_ELAPSED=$(( SCAN_END - SCAN_START ))
+MM=$(( TOTAL_ELAPSED / 60 ))
+SS=$(( TOTAL_ELAPSED % 60 ))
 
 # ── Summary ──────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║            ✅  COLLECTION COMPLETE                   ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
-echo -e "  ${DIM}gau          :${NC} ${WHITE}${GAU_C}${NC}"
-echo -e "  ${DIM}waybackurls  :${NC} ${WHITE}${WB_C}${NC}"
-echo -e "  ${DIM}waymore      :${NC} ${WHITE}${WM_C}${NC}"
-echo -e "  ${DIM}─────────────────────────────${NC}"
-echo -e "  ${DIM}Total unique :${NC} ${BOLD}${WHITE}${TOTAL}${NC}"
-echo -e "  ${DIM}Duration     :${NC} ${WHITE}${TOTAL_ELAPSED}s${NC}"
-echo -e "  ${DIM}Output       :${NC} ${CYAN}${OUTPUT_DIR}/all-urls.txt${NC}"
-echo ""
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "  ${BOLD}${CYAN}[ URL COLLECTION RESULTS ]${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ┌───────────────────┬────────────┐${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  │${NC}  ${DIM}Tool${NC}               ${BOLD}${WHITE}│${NC}  ${DIM}URLs Found${NC}  ${BOLD}${WHITE}│${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ├───────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+
+_cr() {
+    local t="$1"; local c="$2"
+    if [ "$c" -gt 0 ] 2>/dev/null; then
+        printf "  ${BOLD}${WHITE}│${NC}  %-17s  ${BOLD}${WHITE}│${NC}  ${CYAN}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "$t" "$c" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${BOLD}${WHITE}│${NC}  ${DIM}%-17s  │  %8s${NC}  ${BOLD}${WHITE}│${NC}\n" "$t" "$c" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
+}
+_cr "gau"         "$GAU_C"
+_cr "waybackurls" "$WB_C"
+_cr "waymore"     "$WM_C"
+echo -e "${BOLD}${WHITE}  ├───────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+printf   "  ${BOLD}${WHITE}│${NC}  %-17s  ${BOLD}${WHITE}│${NC}  ${WHITE}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "Total unique" "${URO_C:-$TOTAL}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  └───────────────────┴────────────┘${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}║${NC}  ${BOLD}${WHITE}✅  COLLECTION COMPLETE${NC}                                  ${BOLD}${GREEN}║${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════════════════════╣${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Total unique :" "${URO_C:-$TOTAL} URLs" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Duration :" "${MM}m ${SS}s" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${CYAN}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Output :" "$OUTPUT_DIR/all-urls.txt" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"

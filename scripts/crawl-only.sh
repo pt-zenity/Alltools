@@ -52,35 +52,52 @@ skip() {
 
 elapsed_since() { echo $(( $(date +%s) - $1 )); }
 
+warn() {
+    echo -e "${YELLOW}[WARN] $1${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+}
+
 run_tool() {
+    # Quiet mode: raw output → logfile only, terminal shows progress dots
     local label="$1"
     local logfile="$2"
     shift 2
     [ "${1:-}" = "--" ] && shift
-    echo -e "${DIM}  │  ${CYAN}[$(date +%H:%M:%S)][${label}]${NC} ${DIM}starting...${NC}"
-    stdbuf -oL "$@" 2>&1 | tee -a "$logfile" | tee -a "$OUTPUT_DIR/scan.log" || \
-        echo -e "${YELLOW}  [WARN][$(date +%H:%M:%S)] ${label} exited non-zero (continuing)${NC}" \
-            | tee -a "$OUTPUT_DIR/scan.log"
-    echo -e "${DIM}  │  ${CYAN}[$(date +%H:%M:%S)][${label}]${NC} ${DIM}done.${NC}"
+    echo -e "  ${DIM}│  ${CYAN}▶ ${label}${NC} ${DIM}running...${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    stdbuf -oL "$@" >> "$logfile" 2>&1 &
+    local pid=$!
+    local count=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 2; count=$(( count + 1 ))
+        printf "\r  ${DIM}│  ▷ ${label} %${count}s${NC}" "" 2>/dev/null || true
+        if [ $(( count % 10 )) -eq 0 ]; then
+            echo -e "\n  ${DIM}│  ▷ ${label} still running... (${count}×2s)${NC}" \
+                | tee -a "$OUTPUT_DIR/scan.log"
+        fi
+    done
+    printf "\r%80s\r" "" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || warn "${label} exited non-zero (continuing)"
+    echo -e "  ${DIM}│  ${GREEN}✓ ${label}${NC} ${DIM}done${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 }
 
 # ── Header ──────────────────────────────────────────────────
-echo -e "${BOLD}${CYAN}"
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║          🕷️  CRAWL ONLY SCAN 2026                    ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo -e "${NC}"
-echo -e "  ${DIM}Target  :${NC} ${WHITE}$TARGET${NC}"
-echo -e "  ${DIM}Domain  :${NC} ${WHITE}$DOMAIN${NC}"
-echo -e "  ${DIM}Depth   :${NC} ${WHITE}$DEPTH${NC}"
-echo -e "  ${DIM}Threads :${NC} ${WHITE}$THREADS${NC}"
-echo -e "  ${DIM}Output  :${NC} ${CYAN}$OUTPUT_DIR${NC}"
+clear 2>/dev/null || true
+echo ""
+echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${CYAN}║${NC}  ${BOLD}${WHITE}🕷️  WEB CRAWLER TOOLKIT 2026 — CRAWL ONLY${NC}              ${BOLD}${CYAN}║${NC}"
+echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Target  :" "$TARGET"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Domain  :" "$DOMAIN"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Depth   :" "$DEPTH"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Threads :" "$THREADS"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${CYAN}%-40s${BOLD}${CYAN}║${NC}\n" "Output  :" "$OUTPUT_DIR"
+echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
 # ── katana - advanced crawling ────────────────────────────────
 STEP_START=$(date +%s)
 if command -v katana &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[1/4] katana${NC} ${DIM}— active crawling with JS execution${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/4${WHITE}]${NC} ${BOLD}katana${NC} ${DIM}— active crawling with JS execution${NC}"
     run_tool "katana" "$OUTPUT_DIR/katana/tool.log" \
         katana \
             -u "$TARGET" \
@@ -107,7 +124,8 @@ fi
 # ── gospider - additional spider ─────────────────────────────
 STEP_START=$(date +%s)
 if command -v gospider &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[2/4] gospider${NC} ${DIM}— spider with sitemap + robots + JS${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}gospider${NC} ${DIM}— spider with sitemap + robots + JS${NC}"
     run_tool "gospider" "$OUTPUT_DIR/gospider/tool.log" \
         gospider \
             -s "$TARGET" \
@@ -133,7 +151,8 @@ fi
 # ── xnLinkFinder ─────────────────────────────────────────────
 STEP_START=$(date +%s)
 if command -v xnLinkFinder &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[3/4] xnLinkFinder${NC} ${DIM}— link extraction from pages${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/4${WHITE}]${NC} ${BOLD}xnLinkFinder${NC} ${DIM}— link extraction from pages${NC}"
     run_tool "xnLinkFinder" "$OUTPUT_DIR/xnlink_tool.log" \
         xnLinkFinder \
             -i "$TARGET" \
@@ -150,7 +169,7 @@ fi
 
 # ── Combine results ───────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${WHITE}  ┌─[4/4] combine + dedup${NC} ${DIM}— sort -u all sources${NC}"
+echo -e "  ${BOLD}${WHITE}┌─[${CYAN}4/4${WHITE}]${NC} ${BOLD}combine + dedup${NC} ${DIM}— merge all sources + sort -u${NC}"
 STEP_START=$(date +%s)
 cat \
     "$OUTPUT_DIR/katana/urls.txt" \
@@ -167,7 +186,7 @@ ok "combined" "$TOTAL" "$(elapsed_since $STEP_START)"
 STEP_START=$(date +%s)
 if command -v httpx &>/dev/null; then
     echo ""
-    echo -e "${BOLD}${WHITE}  ┌─[+] httpx${NC} ${DIM}— probe alive URLs, detect tech stack${NC}"
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}+${WHITE}]${NC} ${BOLD}httpx${NC} ${DIM}— probe alive URLs + detect tech stack${NC}"
     run_tool "httpx" "$OUTPUT_DIR/httpx_tool.log" \
         httpx \
             -l "$OUTPUT_DIR/combined/all-urls.txt" \
@@ -187,15 +206,38 @@ TOTAL_ELAPSED=$(( SCAN_END - SCAN_START ))
 
 # ── Summary ──────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║            ✅  CRAWL COMPLETE                        ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
-echo -e "  ${DIM}katana       :${NC} ${WHITE}${KATANA_C}${NC}"
-echo -e "  ${DIM}gospider     :${NC} ${WHITE}${GOSPIDER_C}${NC}"
-echo -e "  ${DIM}xnLinkFinder :${NC} ${WHITE}${XNLINK_C}${NC}"
-echo -e "  ${DIM}─────────────────────────────${NC}"
-echo -e "  ${DIM}Total unique :${NC} ${BOLD}${WHITE}${TOTAL}${NC}"
-echo -e "  ${DIM}Alive        :${NC} ${BOLD}${WHITE}${ALIVE_C}${NC}"
-echo -e "  ${DIM}Duration     :${NC} ${WHITE}${TOTAL_ELAPSED}s${NC}"
-echo -e "  ${DIM}Output       :${NC} ${CYAN}${OUTPUT_DIR}${NC}"
-echo ""
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "  ${BOLD}${CYAN}[ CRAWL RESULTS ]${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ┌──────────────────────┬────────────┐${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  │${NC}  ${DIM}Tool${NC}                  ${BOLD}${WHITE}│${NC}  ${DIM}URLs Found${NC}  ${BOLD}${WHITE}│${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ├──────────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+
+_print_row() {
+    local t="$1"; local c="$2"
+    if [ "$c" -gt 0 ] 2>/dev/null; then
+        printf "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${CYAN}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "$t" "$c" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${BOLD}${WHITE}│${NC}  ${DIM}%-20s  │  %8s${NC}  ${BOLD}${WHITE}│${NC}\n" "$t" "$c" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
+}
+_print_row "katana"        "$KATANA_C"
+_print_row "gospider"      "$GOSPIDER_C"
+_print_row "xnLinkFinder"  "$XNLINK_C"
+echo -e "${BOLD}${WHITE}  ├──────────────────────┼────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+printf   "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${WHITE}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "Total unique" "$TOTAL" | tee -a "$OUTPUT_DIR/scan.log"
+printf   "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${GREEN}%8s${NC}  ${BOLD}${WHITE}│${NC}\n" "Alive (httpx)" "$ALIVE_C" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  └──────────────────────┴────────────┘${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+
+MM=$(( TOTAL_ELAPSED / 60 )); SS=$(( TOTAL_ELAPSED % 60 ))
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}║${NC}  ${BOLD}${WHITE}✅  CRAWL COMPLETE${NC}                                       ${BOLD}${GREEN}║${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════════════════════╣${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Total unique :" "$TOTAL URLs" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Alive URLs :" "$ALIVE_C" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Duration :" "${MM}m ${SS}s" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${CYAN}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Output :" "$OUTPUT_DIR" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"

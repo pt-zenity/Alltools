@@ -8,15 +8,18 @@
 #   ./deploy.sh server           deploy server.js only
 #   ./deploy.sh <file> <remote>  deploy single file to custom path
 #
-# METHOD 2: SCP via SSH password (requires -p 9022:22 in docker run)
+# METHOD 2: SCP via SSH password (uses SSH TCP Proxy on port 8890)
 #   SCP_MODE=1 ./deploy.sh scripts
-#   SCP_MODE=1 VPS_HOST=23.111.15.50 VPS_SSH_PORT=9022 ./deploy.sh all
+#   SCP_MODE=1 VPS_HOST=23.111.15.50 VPS_SSH_PORT=8890 ./deploy.sh all
+#
+# NOTE: Port 8890 is the SSH TCP Proxy built into server.js v2026.5.0+
+#       No docker rebuild needed — proxy forwards VPS:8890 → container:22
 # =============================================================
 set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-23.111.15.50}"
 VPS_PORT="${VPS_PORT:-8888}"
-VPS_SSH_PORT="${VPS_SSH_PORT:-9022}"
+VPS_SSH_PORT="${VPS_SSH_PORT:-8890}"
 VPS_SSH_USER="${VPS_SSH_USER:-root}"
 VPS_SSH_PASS="${VPS_SSH_PASS:-CrawlerKit2026!}"
 VPS_API="http://${VPS_HOST}:${VPS_PORT}"
@@ -66,7 +69,7 @@ http_upload() {
     fi
 }
 
-# ── SCP upload (via sshpass + scp) ───────────────────────────
+# ── SCP upload (via sshpass + scp via socat proxy port 8890) ─
 scp_upload() {
     local local_path="$1"
     local remote_path="$2"
@@ -77,21 +80,28 @@ scp_upload() {
         return 1
     fi
 
+    # ProxyCommand: use socat through VPS:8890 (Node.js TCP proxy → container port 22)
+    # This works when docker doesn't directly map port 22 but Node proxy is on 8890
+    local proxy_cmd="socat - TCP:${VPS_HOST}:${VPS_SSH_PORT}"
+    
     sshpass -p "$VPS_SSH_PASS" scp \
         -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=10 \
-        -P "$VPS_SSH_PORT" \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=15 \
+        -o ProxyCommand="$proxy_cmd" \
         "$local_path" \
-        "${VPS_SSH_USER}@${VPS_HOST}:${remote_path}" 2>/dev/null && \
+        "${VPS_SSH_USER}@localhost:${remote_path}" 2>&1 && \
     sshpass -p "$VPS_SSH_PASS" ssh \
         -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=10 \
-        -p "$VPS_SSH_PORT" \
-        "${VPS_SSH_USER}@${VPS_HOST}" \
-        "chmod +x '${remote_path}' 2>/dev/null; echo OK" 2>/dev/null | grep -q "OK" && \
-    echo -e "  ${GREEN}[✓]${NC} $(basename "$local_path") → ${remote_path} ${CYAN}(SCP)${NC}" || {
-        echo -e "  ${RED}[✗]${NC} SCP failed: $local_path"
-        return 1
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=15 \
+        -o ProxyCommand="$proxy_cmd" \
+        "${VPS_SSH_USER}@localhost" \
+        "chmod +x '${remote_path}' 2>/dev/null; echo OK" 2>&1 | grep -q "OK" && \
+    echo -e "  ${GREEN}[✓]${NC} $(basename "$local_path") → ${remote_path} ${CYAN}(SCP via proxy:${VPS_SSH_PORT})${NC}" || {
+        echo -e "  ${RED}[✗]${NC} SCP failed: $local_path — falling back to HTTP API"
+        # Fallback to HTTP API
+        http_upload "$local_path" "$remote_path"
     }
 }
 

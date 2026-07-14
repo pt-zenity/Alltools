@@ -56,19 +56,36 @@ run_tool() {
     local logfile="$2"
     shift 2
     [ "${1:-}" = "--" ] && shift
-    echo -e "${DIM}  │  ${CYAN}[$(date +%H:%M:%S)][${label}]${NC} ${DIM}starting...${NC}"
-    stdbuf -oL "$@" 2>&1 | tee -a "$logfile" | tee -a "$OUTPUT_DIR/scan.log" || \
-        echo -e "${YELLOW}  [WARN][$(date +%H:%M:%S)] ${label} exited non-zero (continuing)${NC}" \
+    echo -e "  ${DIM}│  ${CYAN}▶ ${label}${NC} ${DIM}running...${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    stdbuf -oL "$@" >> "$logfile" 2>&1 &
+    local pid=$!
+    local count=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 2; count=$(( count + 1 ))
+        printf "\r  ${DIM}│  ▷ ${label} %${count}s${NC}" "" 2>/dev/null || true
+        if [ $(( count % 10 )) -eq 0 ]; then
+            echo -e "\n  ${DIM}│  ▷ ${label} still running... (${count}×2s)${NC}" \
+                | tee -a "$OUTPUT_DIR/scan.log"
+        fi
+    done
+    printf "\r%80s\r" "" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || \
+        echo -e "${YELLOW}  [WARN] ${label} exited non-zero (continuing)${NC}" \
             | tee -a "$OUTPUT_DIR/scan.log"
-    echo -e "${DIM}  │  ${CYAN}[$(date +%H:%M:%S)][${label}]${NC} ${DIM}done.${NC}"
+    echo -e "  ${DIM}│  ${GREEN}✓ ${label}${NC} ${DIM}done${NC}" | tee -a "$OUTPUT_DIR/scan.log"
 }
 
 # ── Header ──────────────────────────────────────────────────
-echo -e "${BOLD}${CYAN}"
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║          🔍  JS ANALYZER 2026                        ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo -e "${NC}"
+clear 2>/dev/null || true
+echo ""
+echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${CYAN}║${NC}  ${BOLD}${WHITE}🔍  WEB CRAWLER TOOLKIT 2026 — JS ANALYZER${NC}             ${BOLD}${CYAN}║${NC}"
+echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Target  :" "$TARGET"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${WHITE}%-40s${BOLD}${CYAN}║${NC}\n" "Domain  :" "$DOMAIN"
+printf "${BOLD}${CYAN}║${NC}  ${DIM}%-14s${NC}  ${CYAN}%-40s${BOLD}${CYAN}║${NC}\n" "Output  :" "$OUTPUT_DIR"
+echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+echo ""
 echo -e "  ${DIM}Target  :${NC} ${WHITE}$TARGET${NC}"
 echo -e "  ${DIM}Domain  :${NC} ${WHITE}$DOMAIN${NC}"
 echo -e "  ${DIM}Output  :${NC} ${CYAN}$OUTPUT_DIR${NC}"
@@ -77,7 +94,8 @@ echo ""
 # ── Step 1: Collect JS URLs with katana ──────────────────────
 STEP_START=$(date +%s)
 if command -v katana &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[1/4] katana${NC} ${DIM}— discover JS files via active crawl${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}1/4${WHITE}]${NC} ${BOLD}katana${NC} ${DIM}— discover JS files via active crawl${NC}"
     run_tool "katana" "$OUTPUT_DIR/js-files/katana.log" \
         katana \
             -u "$TARGET" \
@@ -94,7 +112,8 @@ fi
 # ── Step 2: Get JS from gau/wayback ──────────────────────────
 STEP_START=$(date +%s)
 if command -v gau &>/dev/null; then
-    echo -e "${BOLD}${WHITE}  ┌─[2/4] gau${NC} ${DIM}— JS files from wayback + commoncrawl${NC}"
+    echo -e ""
+    echo -e "  ${BOLD}${WHITE}┌─[${CYAN}2/4${WHITE}]${NC} ${BOLD}gau${NC} ${DIM}— JS files from wayback + commoncrawl${NC}"
     run_tool "gau-js" "$OUTPUT_DIR/js-files/gau.log" \
         bash -c "echo '$DOMAIN' | stdbuf -oL gau \
             --providers wayback,commoncrawl 2>&1 | \
@@ -111,7 +130,8 @@ echo -e "  ${BLUE}[i]${NC} Total unique JS files: ${WHITE}${JS_COUNT}${NC}"
 
 # ── Step 3: Download and analyze JS files ────────────────────
 STEP_START=$(date +%s)
-echo -e "${BOLD}${WHITE}  ┌─[3/4] download${NC} ${DIM}— fetch ${JS_COUNT} JS files${NC}"
+echo -e ""
+echo -e "  ${BOLD}${WHITE}┌─[${CYAN}3/4${WHITE}]${NC} ${BOLD}download${NC} ${DIM}— fetch ${JS_COUNT} JS files${NC}"
 if [ "$JS_COUNT" -gt 0 ]; then
     DOWNLOADED=0
     while IFS= read -r js_url; do
@@ -127,7 +147,8 @@ fi
 
 # ── Step 4: Pattern extraction ───────────────────────────────
 STEP_START=$(date +%s)
-echo -e "${BOLD}${WHITE}  ┌─[4/4] extract${NC} ${DIM}— patterns from combined JS${NC}"
+echo -e ""
+echo -e "  ${BOLD}${WHITE}┌─[${CYAN}4/4${WHITE}]${NC} ${BOLD}extract${NC} ${DIM}— pattern analysis from combined JS${NC}"
 
 COMBINED_SIZE=$(wc -c < "$OUTPUT_DIR/js-files/combined.js" 2>/dev/null || echo 0)
 if [ "$COMBINED_SIZE" -gt 0 ]; then
@@ -151,29 +172,64 @@ if [ "$COMBINED_SIZE" -gt 0 ]; then
         head -100 > "$OUTPUT_DIR/secrets/potential-tokens.txt" || true
     TOKEN_COUNT=$(wc -l < "$OUTPUT_DIR/secrets/potential-tokens.txt" 2>/dev/null || echo 0)
 
-    echo -e "  ${DIM}API endpoints    :${NC} ${WHITE}${API_ENDPOINT_COUNT}${NC}"
-    echo -e "  ${DIM}Path routes      :${NC} ${WHITE}${PATHS_COUNT}${NC}"
-    echo -e "  ${DIM}AWS key patterns :${NC} ${WHITE}${AWS_COUNT}${NC}"
-    echo -e "  ${DIM}Potential tokens :${NC} ${WHITE}${TOKEN_COUNT}${NC}"
+    printf "  ${DIM}%-25s${NC}  ${WHITE}%s${NC}\n" "API endpoints    :" "$API_ENDPOINT_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
+    printf "  ${DIM}%-25s${NC}  ${WHITE}%s${NC}\n" "Path routes      :" "$PATHS_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
+    if [ "$AWS_COUNT" -gt 0 ] 2>/dev/null; then
+        echo -e "  ${RED}[!] AWS key patterns : ${AWS_COUNT}  — CHECK IMMEDIATELY${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${DIM}%-25s${NC}  ${WHITE}%s${NC}\n" "AWS key patterns :" "$AWS_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
+    if [ "$TOKEN_COUNT" -gt 0 ] 2>/dev/null; then
+        echo -e "  ${YELLOW}[!] Potential tokens : ${TOKEN_COUNT}  — Review secrets/potential-tokens.txt${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${DIM}%-25s${NC}  ${WHITE}%s${NC}\n" "Potential tokens :" "$TOKEN_COUNT" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
     ok "extraction" "done" "$(elapsed_since $STEP_START)"
 else
-    echo -e "  ${YELLOW}[WARN]${NC} combined.js is empty — nothing to extract"
+    echo -e "  ${YELLOW}[WARN]${NC} combined.js is empty — nothing to extract" | tee -a "$OUTPUT_DIR/scan.log"
     API_ENDPOINT_COUNT=0; PATHS_COUNT=0; AWS_COUNT=0; TOKEN_COUNT=0
 fi
 
 SCAN_END=$(date +%s)
 TOTAL_ELAPSED=$(( SCAN_END - SCAN_START ))
+MM=$(( TOTAL_ELAPSED / 60 ))
+SS=$(( TOTAL_ELAPSED % 60 ))
 
 # ── Summary ──────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║            ✅  JS ANALYSIS COMPLETE                  ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
-echo -e "  ${DIM}JS files found   :${NC} ${WHITE}${JS_COUNT}${NC}"
-echo -e "  ${DIM}API endpoints    :${NC} ${WHITE}${API_ENDPOINT_COUNT:-0}${NC}"
-echo -e "  ${DIM}Path routes      :${NC} ${WHITE}${PATHS_COUNT:-0}${NC}"
-echo -e "  ${DIM}AWS keys         :${NC} ${YELLOW}${AWS_COUNT:-0}${NC}"
-echo -e "  ${DIM}Potential tokens :${NC} ${YELLOW}${TOKEN_COUNT:-0}${NC}"
-echo -e "  ${DIM}Duration         :${NC} ${WHITE}${TOTAL_ELAPSED}s${NC}"
-echo -e "  ${DIM}Output           :${NC} ${CYAN}${OUTPUT_DIR}${NC}"
-echo ""
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "  ${BOLD}${CYAN}[ JS ANALYSIS RESULTS ]${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ┌──────────────────────┬────────────────────────┐${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  │${NC}  ${DIM}Category${NC}              ${BOLD}${WHITE}│${NC}  ${DIM}Count${NC}                   ${BOLD}${WHITE}│${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${WHITE}  ├──────────────────────┼────────────────────────┤${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+
+_jrow() {
+    local label="$1"; local count="$2"; local alert="${3:-}"
+    if [ "$count" -gt 0 ] 2>/dev/null && [ -n "$alert" ]; then
+        printf "  ${BOLD}${WHITE}│${NC}  ${YELLOW}%-20s${NC}  ${BOLD}${WHITE}│${NC}  ${YELLOW}%6s %-17s${NC}  ${BOLD}${WHITE}│${NC}\n" \
+            "$label" "$count" "$alert" | tee -a "$OUTPUT_DIR/scan.log"
+    elif [ "$count" -gt 0 ] 2>/dev/null; then
+        printf "  ${BOLD}${WHITE}│${NC}  %-20s  ${BOLD}${WHITE}│${NC}  ${CYAN}%6s${NC}  ${DIM}%-15s${NC}  ${BOLD}${WHITE}│${NC}\n" \
+            "$label" "$count" "" | tee -a "$OUTPUT_DIR/scan.log"
+    else
+        printf "  ${BOLD}${WHITE}│${NC}  ${DIM}%-20s  │  %6s  %-15s${NC}  ${BOLD}${WHITE}│${NC}\n" \
+            "$label" "$count" "" | tee -a "$OUTPUT_DIR/scan.log"
+    fi
+}
+_jrow "JS files found"   "${JS_COUNT:-0}"             ""
+_jrow "API endpoints"    "${API_ENDPOINT_COUNT:-0}"   ""
+_jrow "Path routes"      "${PATHS_COUNT:-0}"          ""
+_jrow "AWS keys"         "${AWS_COUNT:-0}"            "⚠️ CRITICAL"
+_jrow "Potential tokens" "${TOKEN_COUNT:-0}"          "⚠️ Review"
+echo -e "${BOLD}${WHITE}  └──────────────────────┴────────────────────────┘${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
+
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}║${NC}  ${BOLD}${WHITE}✅  JS ANALYSIS COMPLETE${NC}                                 ${BOLD}${GREEN}║${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════════════════════╣${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${BOLD}${WHITE}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Duration :" "${MM}m ${SS}s" | tee -a "$OUTPUT_DIR/scan.log"
+printf "${BOLD}${GREEN}║${NC}  ${DIM}%-20s${NC}  ${CYAN}%-35s${NC}  ${BOLD}${GREEN}║${NC}\n" "Output :" "$OUTPUT_DIR" | tee -a "$OUTPUT_DIR/scan.log"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}" | tee -a "$OUTPUT_DIR/scan.log"
+echo "" | tee -a "$OUTPUT_DIR/scan.log"
