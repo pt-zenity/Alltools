@@ -1,0 +1,84 @@
+# ============================================================
+# Web Crawler Toolkit 2026 - Docker Compose
+# ============================================================
+
+services:
+  # ── Main Crawler Toolkit ──────────────────────────────────
+  crawler-toolkit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+    image: crawler-toolkit:2026
+    container_name: crawler-toolkit
+    restart: unless-stopped
+    ports:
+      - "3000:3000"    # Web Dashboard
+      - "8080:8080"    # API (optional)
+    volumes:
+      # Persistent output storage
+      - ./output:/workspace/output
+      # Target files
+      - ./targets:/workspace/targets
+      # Logs
+      - ./logs:/logs
+      # Data storage
+      - ./data:/data
+      # Config (read-only)
+      - ./config:/workspace/config:ro
+      # Wordlists (read-only)
+      - ./wordlists:/workspace/wordlists:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - OUTPUT_DIR=/workspace/output
+      - SCRIPTS_DIR=/workspace/scripts
+      - THREADS=50
+      - DEPTH=3
+      - TIMEOUT=10
+      # Optional: Add API keys for enhanced coverage
+      # - GITHUB_TOKEN=your_github_token
+      # - SHODAN_API_KEY=your_shodan_key
+      # - CENSYS_API_KEY=your_censys_key
+    command: dashboard
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - crawler-net
+    # Security: Don't run as root in production
+    # user: "1000:1000"  # Uncomment if needed
+    labels:
+      - "crawler.toolkit=2026"
+      - "crawler.service=dashboard"
+
+  # ── Redis Cache (optional, for job queue) ────────────────
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: crawler-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - crawler-net
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     retries: 3
+
+# ── Networks ──────────────────────────────────────────────
+networks:
+  crawler-net:
+    driver: bridge
+
+# ── Volumes ───────────────────────────────────────────────
+volumes:
+  crawler-output:
+    driver: local
+  # redis-data:
+  #   driver: local

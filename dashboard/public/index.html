@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🕷️ Web Crawler Toolkit 2026</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Animated Background -->
+    <div id="bg-canvas"></div>
+    
+    <!-- Main App Container -->
+    <div id="app">
+        <!-- Sidebar Navigation -->
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <i class="fas fa-spider"></i>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-name">CrawlerKit</span>
+                        <span class="logo-version">2026 Pro</span>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-page="scan">
+                    <i class="fas fa-crosshairs"></i>
+                    <span>New Scan</span>
+                    <span class="badge-new">NEW</span>
+                </a>
+                <a href="#" class="nav-item" data-page="jobs">
+                    <i class="fas fa-tasks"></i>
+                    <span>Jobs</span>
+                    <span class="badge-count" id="active-job-badge">0</span>
+                </a>
+                <a href="#" class="nav-item" data-page="results">
+                    <i class="fas fa-folder-open"></i>
+                    <span>Results</span>
+                </a>
+                <a href="#" class="nav-item" data-page="tools">
+                    <i class="fas fa-toolbox"></i>
+                    <span>Tools</span>
+                </a>
+                <a href="#" class="nav-item" data-page="terminal">
+                    <i class="fas fa-terminal"></i>
+                    <span>Terminal</span>
+                </a>
+                <a href="#" class="nav-item" data-page="docs">
+                    <i class="fas fa-book"></i>
+                    <span>Docs</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="ws-status">
+                    <span class="ws-dot" id="ws-dot"></span>
+                    <span id="ws-text">Connecting...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main id="main">
+            <!-- Top Bar -->
+            <header class="topbar">
+                <button id="sidebar-toggle" class="icon-btn">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="topbar-title" id="page-title">Dashboard</div>
+                <div class="topbar-actions">
+                    <button class="icon-btn" title="Refresh" onclick="refreshPage()">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <div class="time-display" id="clock"></div>
+                </div>
+            </header>
+
+            <!-- Page: Dashboard -->
+            <div id="page-dashboard" class="page active">
+                <div class="page-content">
+                    <!-- Stats Grid -->
+                    <div class="stats-grid">
+                        <div class="stat-card" id="stat-active-jobs">
+                            <div class="stat-icon" style="--color: #6366f1">
+                                <i class="fas fa-bolt"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="stat-active-count">0</div>
+                                <div class="stat-label">Active Jobs</div>
+                            </div>
+                        </div>
+                        <div class="stat-card" id="stat-total-jobs">
+                            <div class="stat-icon" style="--color: #22c55e">
+                                <i class="fas fa-check-circle"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="stat-total-count">0</div>
+                                <div class="stat-label">Total Scans</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon" style="--color: #f59e0b">
+                                <i class="fas fa-folder"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="stat-outputs-count">0</div>
+                                <div class="stat-label">Output Dirs</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon" style="--color: #06b6d4">
+                                <i class="fas fa-wrench"></i>
+                            </div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="stat-tools-count">0</div>
+                                <div class="stat-label">Tools Ready</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions + Activity Log -->
+                    <div class="two-col-grid">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <i class="fas fa-rocket"></i>
+                                <h3>Quick Scan</h3>
+                            </div>
+                            <div class="panel-body quick-scan">
+                                <div class="input-group">
+                                    <i class="fas fa-globe input-icon"></i>
+                                    <input type="text" id="quick-target" 
+                                           placeholder="https://example.com or domain.com"
+                                           class="text-input">
+                                </div>
+                                <div class="scan-type-grid">
+                                    <button class="scan-type-btn active" data-type="full-scan">
+                                        <i class="fas fa-search"></i>
+                                        <span>Full Scan</span>
+                                    </button>
+                                    <button class="scan-type-btn" data-type="crawl">
+                                        <i class="fas fa-spider"></i>
+                                        <span>Crawl Only</span>
+                                    </button>
+                                    <button class="scan-type-btn" data-type="urls">
+                                        <i class="fas fa-link"></i>
+                                        <span>Collect URLs</span>
+                                    </button>
+                                    <button class="scan-type-btn" data-type="js-analyze">
+                                        <i class="fab fa-js"></i>
+                                        <span>JS Analyze</span>
+                                    </button>
+                                </div>
+                                <button id="quick-scan-btn" class="btn-primary" onclick="quickScan()">
+                                    <i class="fas fa-play"></i>
+                                    Start Scan
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <div class="panel-header">
+                                <i class="fas fa-history"></i>
+                                <h3>Recent Jobs</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="recent-jobs-list" class="job-list">
+                                    <div class="empty-state">
+                                        <i class="fas fa-inbox"></i>
+                                        <p>No jobs yet</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tool Status Grid -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <i class="fas fa-toolbox"></i>
+                            <h3>Tool Status</h3>
+                            <button class="btn-sm" onclick="loadTools()">
+                                <i class="fas fa-sync-alt"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="panel-body">
+                            <div id="tool-status-grid" class="tool-grid">
+                                <div class="loading-spinner">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    Loading tools...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: New Scan -->
+            <div id="page-scan" class="page">
+                <div class="page-content">
+                    <div class="scan-builder">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <i class="fas fa-crosshairs"></i>
+                                <h3>Configure Scan</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="form-grid">
+                                    <div class="form-group full-width">
+                                        <label>Target URL / Domain</label>
+                                        <div class="input-group">
+                                            <i class="fas fa-globe input-icon"></i>
+                                            <input type="text" id="scan-target" 
+                                                   placeholder="https://example.com"
+                                                   class="text-input" autocomplete="off">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Scan Type</label>
+                                        <select id="scan-type" class="select-input">
+                                            <option value="full-scan">🔍 Full Reconnaissance Scan</option>
+                                            <option value="crawl">🕷️ Crawl Only (katana + gospider)</option>
+                                            <option value="urls">🔗 URL Collection (gau + waymore)</option>
+                                            <option value="js-analyze">📜 JavaScript Analysis</option>
+                                            <option value="custom">⚡ Custom Command</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Crawl Depth</label>
+                                        <div class="range-group">
+                                            <input type="range" id="scan-depth" min="1" max="10" value="3" class="range-input">
+                                            <span id="scan-depth-val" class="range-val">3</span>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Threads</label>
+                                        <div class="range-group">
+                                            <input type="range" id="scan-threads" min="5" max="200" value="50" step="5" class="range-input">
+                                            <span id="scan-threads-val" class="range-val">50</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div id="custom-cmd-group" class="form-group full-width" style="display:none">
+                                    <label>Custom Command</label>
+                                    <div class="input-group">
+                                        <i class="fas fa-terminal input-icon"></i>
+                                        <input type="text" id="scan-custom-cmd" 
+                                               placeholder="katana -u https://example.com -d 3 ..."
+                                               class="text-input mono">
+                                    </div>
+                                </div>
+
+                                <!-- Tool Selection -->
+                                <div class="form-group full-width">
+                                    <label>Tools to Use</label>
+                                    <div class="tool-toggle-grid">
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="katana">
+                                            <span>katana</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="gau">
+                                            <span>gau</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="waymore">
+                                            <span>waymore</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="gospider">
+                                            <span>gospider</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="xnLinkFinder">
+                                            <span>xnLinkFinder</span>
+                                        </label>
+                                        <label class="tool-toggle">
+                                            <input type="checkbox" checked data-tool="httpx">
+                                            <span>httpx</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button class="btn-primary btn-lg" onclick="startScan()">
+                                        <i class="fas fa-rocket"></i>
+                                        Launch Scan
+                                    </button>
+                                    <button class="btn-secondary" onclick="resetScanForm()">
+                                        <i class="fas fa-times"></i>
+                                        Reset
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Output Panel -->
+                    <div class="panel" id="scan-output-panel" style="display:none">
+                        <div class="panel-header">
+                            <i class="fas fa-terminal"></i>
+                            <h3>Live Output</h3>
+                            <div class="panel-header-actions">
+                                <span id="live-job-id" class="badge-id"></span>
+                                <button class="btn-sm btn-danger" id="stop-btn" onclick="stopCurrentScan()">
+                                    <i class="fas fa-stop"></i> Stop
+                                </button>
+                                <button class="btn-sm" onclick="clearOutput()">
+                                    <i class="fas fa-trash"></i> Clear
+                                </button>
+                            </div>
+                        </div>
+                        <div class="panel-body p0">
+                            <div id="output-terminal" class="terminal-output">
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">$</span>
+                                    <span class="terminal-text">Waiting for output...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Jobs -->
+            <div id="page-jobs" class="page">
+                <div class="page-content">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <i class="fas fa-tasks"></i>
+                            <h3>All Jobs</h3>
+                            <div class="tabs">
+                                <button class="tab active" data-tab="active">Active</button>
+                                <button class="tab" data-tab="history">History</button>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <div id="jobs-active-list" class="jobs-container">
+                                <div class="empty-state">
+                                    <i class="fas fa-pause-circle"></i>
+                                    <p>No active jobs</p>
+                                </div>
+                            </div>
+                            <div id="jobs-history-list" class="jobs-container" style="display:none">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Results -->
+            <div id="page-results" class="page">
+                <div class="page-content">
+                    <div class="two-col-grid results-layout">
+                        <!-- File Tree -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <i class="fas fa-folder-tree"></i>
+                                <h3>Output Files</h3>
+                                <button class="btn-sm" onclick="loadOutputs()">
+                                    <i class="fas fa-sync-alt"></i> Refresh
+                                </button>
+                            </div>
+                            <div class="panel-body p0">
+                                <div id="output-tree" class="file-tree">
+                                    <div class="loading-spinner">
+                                        <i class="fas fa-spinner fa-spin"></i>
+                                        Loading...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- File Viewer -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <i class="fas fa-file-alt"></i>
+                                <h3>File Viewer</h3>
+                                <div id="file-viewer-actions" style="display:none">
+                                    <button class="btn-sm" id="download-file-btn">
+                                        <i class="fas fa-download"></i> Download
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="panel-body p0">
+                                <div id="file-viewer" class="file-viewer">
+                                    <div class="file-viewer-placeholder">
+                                        <i class="fas fa-file-code"></i>
+                                        <p>Select a file to view</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Tools -->
+            <div id="page-tools" class="page">
+                <div class="page-content">
+                    <div id="tools-detail-grid" class="tools-detail">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Terminal -->
+            <div id="page-terminal" class="page">
+                <div class="page-content">
+                    <div class="panel terminal-panel">
+                        <div class="panel-header">
+                            <i class="fas fa-terminal"></i>
+                            <h3>Command Terminal</h3>
+                        </div>
+                        <div class="panel-body p0">
+                            <div id="terminal-history" class="terminal-output big">
+                                <div class="terminal-line">
+                                    <span class="terminal-prompt">crawler-toolkit-2026 $</span>
+                                    <span class="terminal-text terminal-cursor">_</span>
+                                </div>
+                            </div>
+                            <div class="terminal-input-bar">
+                                <span class="terminal-prompt-bar">$</span>
+                                <input type="text" id="terminal-input" 
+                                       placeholder="Enter command... (e.g. katana -u https://example.com -d 2)"
+                                       class="terminal-input-field"
+                                       autocomplete="off" spellcheck="false">
+                                <button class="btn-primary" onclick="execTerminalCmd()">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Docs -->
+            <div id="page-docs" class="page">
+                <div class="page-content" id="docs-content">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
