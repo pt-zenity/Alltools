@@ -110,19 +110,19 @@ RUN echo "==> Installing additional PD tools..." && \
     go install github.com/tomnomnom/fff@latest && \
     echo "fff: OK"
 
-# ── NEW tools: Cariddi + mantra ───────────────────────────────
-RUN echo "==> Installing Cariddi and mantra..." && \
+# ── NEW tools: Cariddi + mantra + Gitleaks ──────────────────
+RUN echo "==> Installing Cariddi, mantra, gitleaks..." && \
     # Cariddi — in-depth crawler: finds endpoints, secrets, extensions
     go install github.com/edoardottt/cariddi/cmd/cariddi@latest && \
     echo "cariddi: OK" && \
-    # mantra — search for secrets buried in JS/HTML via regex patterns
-    go install github.com/MrEmpy/mantra@latest && \
-    echo "mantra: OK"
-
-# ── Gitleaks — secret scanner for git repos & raw text ───────
-RUN echo "==> Installing gitleaks..." && \
-    # Use pinned v8.x tag that builds on Go 1.21
-    go install github.com/gitleaks/gitleaks/v8@v8.18.4 && \
+    # mantra — hunt secrets buried in JS/HTML via regex patterns
+    # CORRECT module path: brosck/mantra  (NOT MrEmpy/mantra — that's outdated/wrong)
+    go install github.com/brosck/mantra@latest && \
+    echo "mantra: OK" && \
+    # gitleaks — scan files/repos for leaked credentials & API keys
+    # CORRECT module path: zricethezav/gitleaks  (NOT gitleaks/gitleaks — fails on Go 1.21)
+    # Pinned v8.18.4 — last tag compatible with Go 1.21 (no generics breakage)
+    go install github.com/zricethezav/gitleaks/v8@v8.18.4 && \
     echo "gitleaks: OK"
 
 # ── Stage: Python tools ───────────────────────────────────────
